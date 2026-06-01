@@ -1695,6 +1695,8 @@ buttonpress(XEvent *e)
 		return;
 	}
 	/* clickable bar: tags view/claim, layout cycle, scroll to step tags */
+	if (systray && ev->window == systray->win)
+		return;
 	if (m && ev->window == m->barwin) {
 		int x = barmargin, i;
 		char buf[64];
@@ -1966,7 +1968,6 @@ void
 clientmessage(XEvent *e)
 {
 	XWindowAttributes wa;
-	XSetWindowAttributes swa;
 	XClientMessageEvent *cme = &e->xclient;
 	Client *c;
 
@@ -2004,8 +2005,7 @@ clientmessage(XEvent *e)
 			XAddToSaveSet(dpy, c->win);
 			XSelectInput(dpy, c->win, StructureNotifyMask | PropertyChangeMask | ResizeRedirectMask);
 			XReparentWindow(dpy, c->win, systray->win, 0, 0);
-			swa.background_pixel = 0;
-			XChangeWindowAttributes(dpy, c->win, CWBackPixel, &swa);
+			XSetWindowBackgroundPixmap(dpy, c->win, ParentRelative);
 			sendevent(c->win, netatom[Xembed], StructureNotifyMask, CurrentTime, XEMBED_EMBEDDED_NOTIFY, 0, systray->win, XEMBED_EMBEDDED_VERSION);
 			XSync(dpy, False);
 			setclientstate(c, NormalState);
@@ -2552,7 +2552,7 @@ updatesystray(void)
 		systray->win = XCreateWindow(dpy, root, m->mx + m->mw, m->by, 1, bh, 0, depth,
 		                             InputOutput, visual,
 		                             CWOverrideRedirect | CWEventMask | CWBackPixel | CWBorderPixel | CWColormap, &wa);
-		XSelectInput(dpy, systray->win, SubstructureNotifyMask);
+		XSelectInput(dpy, systray->win, SubstructureNotifyMask | ButtonPressMask | ExposureMask);
 		XChangeProperty(dpy, systray->win, netatom[NetSystemTrayOrientation], XA_CARDINAL, 32,
 		                PropModeReplace, (unsigned char *)&netatom[NetSystemTrayOrientationHorz], 1);
 		{
@@ -2579,8 +2579,7 @@ updatesystray(void)
 
 	w = 0;
 	for (i = systray->icons; i; i = i->next) {
-		wa.background_pixel = 0; /* transparent icon bg -> the pill shows through */
-		XChangeWindowAttributes(dpy, i->win, CWBackPixel, &wa);
+		XSetWindowBackgroundPixmap(dpy, i->win, ParentRelative);
 		XMapRaised(dpy, i->win);
 		XMoveResizeWindow(dpy, i->win, pad + w, systrayvertpad, i->w, i->h);
 		w += i->w + systrayspacing;
