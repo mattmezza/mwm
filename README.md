@@ -239,8 +239,8 @@ examples/      xinitrc, sxhkdrc, picom.conf
 
 ## Screenshots
 
-<details>
-<summary>Click to expand</summary>
+<details open>
+<summary>Click to collapse</summary>
 
 ![screenshot 0](examples/screenshots/0.png)
 *Default setup — cols layout with tags, bar, and gap.*
