@@ -1,0 +1,16 @@
+#!/bin/sh
+# Debug ~/.xinitrc: capture why mwm exits.
+#   cp /vagrant/examples/xinitrc-debug ~/.xinitrc ; startx
+# When mwm dies, an xterm opens showing /tmp/mwm.log so you can read the error
+# (close that xterm to end the session).
+
+MWM_DIR=/vagrant
+export PATH="$MWM_DIR:$PATH"
+
+command -v xsetroot >/dev/null && xsetroot -solid "#16161e"
+
+# run the built mwm, capturing stderr+stdout
+"$MWM_DIR/mwm" >/tmp/mwm.log 2>&1
+
+# if we get here, mwm exited — show the log and hold so you can read it
+xterm -hold -geometry 120x40 -e sh -c 'echo "=== mwm exited; /tmp/mwm.log ==="; cat /tmp/mwm.log; echo "=== end ==="'

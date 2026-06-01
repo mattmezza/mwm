@@ -1,0 +1,61 @@
+#!/bin/sh
+# ~/.xinitrc to test the freshly built mwm WITHOUT installing it.
+# Runs ./mwm and ./mwmc straight from the build dir.
+#
+#   cp /vagrant/examples/xinitrc-build ~/.xinitrc
+#   cd /vagrant && make
+#   startx
+
+# Build/output directory (the Vagrant synced folder).
+MWM_DIR=/vagrant
+
+# Put the built binaries first on PATH so `mwmc` (used by sxhkd) resolves to
+# the build output, not an installed copy.
+export PATH="$MWM_DIR:$PATH"
+
+# A visible background so you can tell X started.
+# Load a complete keymap — bare VMs sometimes start X with a partial map, which
+# makes sxhkd report "No keycodes found for keysym ..." for keys like q/b.
+command -v setxkbmap >/dev/null && setxkbmap us
+
+# Load styling (colors/font/alphas/geometry) into the X resource DB before mwm
+# reads it at startup. Edit examples/Xresources (or ~/.Xresources) to restyle
+# without recompiling.
+[ -f "$MWM_DIR/examples/Xresources" ] && xrdb -merge "$MWM_DIR/examples/Xresources"
+
+command -v xsetroot >/dev/null && xsetroot -solid "#16161e"
+
+# SPICE guest agent: lets virt-viewer's "Displays" menu enable/resize heads
+# (needed to bring up a 2nd monitor in the VM) and shares the clipboard.
+command -v spice-vdagent >/dev/null && spice-vdagent &
+
+# Tiny status line: writes the root window name once a second; mwm renders it
+# in the right-hand bar pill (this is the slstatus slot — same mechanism).
+if command -v xsetroot >/dev/null; then
+	( while :; do xsetroot -name "$(date '+%a %d %b  %H:%M:%S')"; sleep 1; done ) &
+fi
+
+# --- fake dual monitor (for testing multi-monitor logic on one head) ---
+# Uncomment to split the single output into two logical monitors that mwm sees
+# via Xinerama. Must run BEFORE mwm starts (mwm only re-reads geometry on a
+# root resize). Comment out again to go back to a single monitor.
+out=$(xrandr -q | awk '/ connected/{print $1; exit}')
+res=$(xrandr -q | awk '/\*/{print $1; exit}')
+w=${res%x*}; h=${res#*x}; half=$((w/2))
+xrandr --setmonitor MON-L ${half}/0x${h}/0+0+0       "$out"
+xrandr --setmonitor MON-R ${half}/0x${h}/0+${half}+0 none
+
+# Keybindings: map keys to mwmc calls (Super = Mod4). Optional but recommended.
+if command -v sxhkd >/dev/null && [ -f "$MWM_DIR/examples/sxhkdrc" ]; then
+	sxhkd -c "$MWM_DIR/examples/sxhkdrc" &
+fi
+
+# Optional compositor for real bar translucency (set roundcorners=0 in
+# config.h if picom rounds corners too).
+command -v picom >/dev/null && picom &
+
+# Something to tile on startup.
+command -v xterm >/dev/null && xterm &
+
+# The window manager itself (built binary). exec so logout ends the session.
+exec "$MWM_DIR/mwm"

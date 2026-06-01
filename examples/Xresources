@@ -1,0 +1,48 @@
+! Example mwm styling via Xresources. Load before starting mwm:
+!     xrdb -merge ~/.Xresources       (or this file)
+! then (re)start mwm. Anything omitted keeps the config.h default.
+! Colors are #rrggbb; alphas accept 0xNN or decimal (0..255); mfact is a float.
+
+mwm.font:            monospace:size=10
+
+! left pill + normal tags
+mwm.normfg:          #c0caf5
+mwm.normbg:          #1a1b26
+mwm.normborder:      #3b4261
+! selected tag + focused window border
+mwm.selfg:           #1a1b26
+mwm.selbg:           #7aa2f7
+mwm.selborder:       #7aa2f7
+! urgent tag
+mwm.urgfg:           #1a1b26
+mwm.urgbg:           #f7768e
+mwm.urgborder:       #f7768e
+! center title pill
+mwm.titlefg:         #c0caf5
+mwm.titlebg:         #1a1b26
+! right status pill
+mwm.statusfg:        #c0caf5
+mwm.statusbg:        #1a1b26
+! bar background behind/around the pills. barbgalpha 0 = transparent bar with
+! floating pills; raise it (e.g. 0xff) for a solid, contrasted bar strip.
+mwm.barbg:           #16161e
+mwm.barbgalpha:      0x00
+
+! pill background translucency (needs a compositor to actually show)
+mwm.normbgalpha:     0xc0
+mwm.selbgalpha:      0xe0
+mwm.urgbgalpha:      0xe0
+mwm.titlebgalpha:    0xa0
+mwm.statusbgalpha:   0xa0
+
+! geometry / spacing
+mwm.borderpx:        2
+mwm.gappx:           10
+mwm.cornerradius:    5
+mwm.segradius:       5
+mwm.barpadx:         10
+mwm.barvertpad:      3
+mwm.barmargin:       10
+mwm.barvmargin:      0
+mwm.barseggap:       8
+mwm.mfact:           0.55

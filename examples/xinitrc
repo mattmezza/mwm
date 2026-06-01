@@ -1,0 +1,20 @@
+#!/bin/sh
+# Example ~/.xinitrc for running mwm. Copy to ~/.xinitrc and `startx`.
+
+# Optional: a compositor for real bar translucency and shadows. If picom
+# already rounds window corners, set `roundcorners = 0` in config.h.
+picom --config "$HOME/.config/picom/picom.conf" &
+
+# Status line: slstatus writes the root window name, which mwm renders in the
+# right-hand bar pill. Any tool that sets the root name (xsetroot -name) works.
+slstatus &
+
+# Keybindings live OUTSIDE mwm: sxhkd maps keys to `mwmc` calls.
+sxhkd -c "$HOME/.config/sxhkd/sxhkdrc" &
+
+# A wallpaper/terminal so the screen isn't blank.
+xsetroot -solid "#16161e"
+# xterm &
+
+# Finally, the window manager (exec so logout ends the session).
+exec mwm

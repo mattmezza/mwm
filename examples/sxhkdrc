@@ -1,0 +1,80 @@
+# Example sxhkd bindings for mwm. mwm has NO built-in keybindings: sxhkd (or
+# any tool) turns key presses into `mwmc` calls. Copy to ~/.config/sxhkd/sxhkdrc.
+#
+# super = Mod4 (the "windows" key).
+
+# --- launching (mwm does not spawn; bind your own) ---
+super + Return
+	xterm
+super + d
+	dmenu_run
+
+# --- focus ---
+super + j
+	mwmc focus next
+super + k
+	mwmc focus prev
+super + Tab
+	mwmc focus last
+super + {1-9}
+	mwmc focus tag {1-9}
+super + 0
+	mwmc focus tag 10
+super + bracketright
+	mwmc focus tag next
+super + bracketleft
+	mwmc focus tag prev
+super + {comma,period}
+	mwmc focus mon {prev,next}
+
+# --- move windows / tags ---
+super + shift + {1-9}
+	mwmc move win {1-9}
+super + shift + 0
+ 	mwmc move win 10
+super + shift + {bracketright,bracketleft}
+	mwmc move win {next,prev}
+super + m
+	mwmc move win master
+super + shift + {comma,period}
+	mwmc move tag {prev,next}
+super + ctrl + {comma,period}
+	mwmc move win mon {prev,next}
+super + shift + {j,k}
+	mwmc swap {next,prev}
+
+# --- layout / geometry ---
+super + {t,s,f}
+	mwmc layout {cols,stack,float}
+super + space
+	mwmc layout next
+super + {h,l}
+	mwmc master ratio {-0.05,+0.05}
+super + {i,o}
+	mwmc master {+1,-1}
+super + {minus,equal}
+	mwmc gap {-5,+5}
+
+# --- floating window geometry (also: hold Super and drag = move, Super+right-drag = resize) ---
+super + c
+	mwmc win center
+super + ctrl + {h,j,k,l}
+	mwmc win resize {-20 0,0 20,0 -20,20 0}
+super + alt + {h,j,k,l}
+	mwmc win move {-20 0,0 20,0 -20,20 0}
+
+# --- window state ---
+super + shift + space
+	mwmc win toggle float
+super + shift + f
+	mwmc win toggle full
+super + shift + s
+	mwmc win toggle sticky
+super + q
+	mwmc win close
+
+# --- session ---
+super + b
+	mwmc bar toggle
+super + shift + q
+	mwmc quit

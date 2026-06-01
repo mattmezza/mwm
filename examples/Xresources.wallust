@@ -1,0 +1,42 @@
+! Add these lines to the wallust template that targets ~/.cache/wallust/
+! colors.Xresources (the same template with your *.colorN lines), so mwm picks
+! up the palette. mwm reads the "mwm.*" namespace, NOT the generic "*.colorN"
+! wallust emits, so map them explicitly here.
+!
+! IMPORTANT: wallust uses DOUBLE-brace placeholders {{color4}}, not single
+! {color4} (single braces are pywal syntax and stay literal under wallust).
+! After verifying ~/.cache/wallust/colors.Xresources shows real #hex values:
+!     xrdb -merge ~/.Xresources && mwmc reload
+! (put that in your wallpaper/wallust hook to retheme live.)
+!
+! Alphas (translucency) and geometry stay at the config.h defaults — wallust
+! doesn't provide them. Add mwm.*alpha / mwm.gappx etc. with plain numbers if
+! you want them themed too.
+
+! ---- mwm (matteo's window manager) ----
+mwm.font:       monospace:size=10
+
+mwm.normfg:     {{foreground}}
+mwm.normbg:     {{background}}
+mwm.normborder: {{color8}}
+
+! selected tag highlight + focused window border (your accent colour)
+mwm.selfg:      {{background}}
+mwm.selbg:      {{color4}}
+mwm.selborder:  {{color4}}
+
+! urgent tag
+mwm.urgfg:      {{background}}
+mwm.urgbg:      {{color1}}
+mwm.urgborder:  {{color1}}
+
+! center title pill
+mwm.titlefg:    {{foreground}}
+mwm.titlebg:    {{background}}
+
+! right status pill
+mwm.statusfg:   {{foreground}}
+mwm.statusbg:   {{background}}
+
+! bar background strip (raise mwm.barbgalpha in config/Xresources for a solid bar)
+mwm.barbg:      {{background}}
