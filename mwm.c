@@ -1694,9 +1694,26 @@ buttonpress(XEvent *e)
 		}
 		return;
 	}
-	/* clickable bar: tags view/claim, layout cycle, scroll to step tags */
-	if (systray && ev->window == systray->win)
+	/* forward button press on the tray window to the icon under the cursor */
+	if (systray && ev->window == systray->win) {
+		Client *i;
+		int off = lrpad / 2;
+		for (i = systray->icons; i; i = i->next) {
+			if (ev->x >= off && ev->x < off + (int)i->w
+			    && ev->y >= systrayvertpad && ev->y < systrayvertpad + (int)i->h) {
+				XButtonEvent fwd = *ev;
+				fwd.window = i->win;
+				fwd.x -= off;
+				fwd.y -= systrayvertpad;
+				fwd.subwindow = None;
+				XSendEvent(dpy, i->win, True, ButtonPressMask, (XEvent *)&fwd);
+				XSync(dpy, False);
+				return;
+			}
+			off += i->w + systrayspacing;
+		}
 		return;
+	}
 	if (m && ev->window == m->barwin) {
 		int x = barmargin, i;
 		char buf[64];
@@ -2003,7 +2020,14 @@ clientmessage(XEvent *e)
 			updatesizehints(c);
 			updatesystrayicongeom(c, wa.width, wa.height);
 			XAddToSaveSet(dpy, c->win);
-			XSelectInput(dpy, c->win, StructureNotifyMask | PropertyChangeMask | ResizeRedirectMask);
+			{
+			XWindowAttributes wa_ev;
+			if (XGetWindowAttributes(dpy, c->win, &wa_ev))
+				XSelectInput(dpy, c->win, wa_ev.your_event_mask
+				             | StructureNotifyMask | PropertyChangeMask | ResizeRedirectMask);
+			else
+				XSelectInput(dpy, c->win, StructureNotifyMask | PropertyChangeMask | ResizeRedirectMask);
+		}
 			XReparentWindow(dpy, c->win, systray->win, 0, 0);
 			XSetWindowBackgroundPixmap(dpy, c->win, ParentRelative);
 			sendevent(c->win, netatom[Xembed], StructureNotifyMask, CurrentTime, XEMBED_EMBEDDED_NOTIFY, 0, systray->win, XEMBED_EMBEDDED_VERSION);
@@ -2546,7 +2570,7 @@ updatesystray(void)
 		systray = ecalloc(1, sizeof(Systray));
 		wa.override_redirect = True;
 		wa.event_mask = ButtonPressMask | ExposureMask;
-		wa.background_pixel = fillcol[SchemeStatus].pixel; /* same pill bg as the segments */
+		wa.background_pixel = 0; /* fully transparent — bar background shows through */
 		wa.border_pixel = 0;
 		wa.colormap = cmap;
 		systray->win = XCreateWindow(dpy, root, m->mx + m->mw, m->by, 1, bh, 0, depth,
@@ -2591,7 +2615,7 @@ updatesystray(void)
 	} else {
 		unsigned int tw = w + 2 * pad;
 		x = m->mx + m->mw - barmargin - tw;
-		XSetWindowBackground(dpy, systray->win, fillcol[SchemeStatus].pixel);
+		/* no background set — fully transparent so the bar's own background shows through */
 		XMoveResizeWindow(dpy, systray->win, x, m->by, tw, bh);
 		XClearWindow(dpy, systray->win);
 		if (roundcorners)
