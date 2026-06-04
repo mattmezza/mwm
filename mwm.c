@@ -2570,7 +2570,7 @@ updatesystray(void)
 		systray = ecalloc(1, sizeof(Systray));
 		wa.override_redirect = True;
 		wa.event_mask = ButtonPressMask | ExposureMask;
-		wa.background_pixel = 0; /* fully transparent — bar background shows through */
+		wa.background_pixel = fillcol[SchemeStatus].pixel; /* same pill bg as the segments */
 		wa.border_pixel = 0;
 		wa.colormap = cmap;
 		systray->win = XCreateWindow(dpy, root, m->mx + m->mw, m->by, 1, bh, 0, depth,
@@ -2615,7 +2615,7 @@ updatesystray(void)
 	} else {
 		unsigned int tw = w + 2 * pad;
 		x = m->mx + m->mw - barmargin - tw;
-		/* no background set — fully transparent so the bar's own background shows through */
+		XSetWindowBackground(dpy, systray->win, fillcol[SchemeStatus].pixel);
 		XMoveResizeWindow(dpy, systray->win, x, m->by, tw, bh);
 		XClearWindow(dpy, systray->win);
 		if (roundcorners)
