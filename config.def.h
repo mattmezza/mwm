@@ -63,7 +63,7 @@ static char *colors[][3] = {
 	[SchemeUrg]    = { "#1a1b26", "#f7768e", "#f7768e" }, /* urgent tag */
 	[SchemeTitle]  = { "#c0caf5", "#1a1b26", "#000000" }, /* center title pill */
 	[SchemeStatus] = { "#c0caf5", "#1a1b26", "#000000" }, /* right status pill */
-	[SchemeBar]    = { "#c0caf5", "#16161e", "#000000" }, /* bar background (behind/around pills) */
+	[SchemeBar]    = { "#c0caf5", "#16161e", "#000000" }, /* (unused: bar is shaped to its pills, so the gaps between pills show the wallpaper — there is no bar-wide background) */
 };
 static unsigned int alphas[][3] = {
 	/*                 fg      bg      border */
@@ -72,8 +72,9 @@ static unsigned int alphas[][3] = {
 	[SchemeUrg]    = { OPAQUE, 0xe0,   OPAQUE },
 	[SchemeTitle]  = { OPAQUE, 0xa0,   OPAQUE },
 	[SchemeStatus] = { OPAQUE, 0xa0,   OPAQUE },
-	[SchemeBar]    = { OPAQUE, 0x00,   OPAQUE }, /* bg alpha 0 = transparent bar (floating pills).
-	                                               raise it (e.g. 0xff) for a solid bar. */
+	[SchemeBar]    = { OPAQUE, 0x00,   OPAQUE }, /* (unused: see SchemeBar note above — the bar
+	                                               is shaped to its pills, so there is no bar-wide
+	                                               background to tint) */
 };
 
 /* ---- tags ------------------------------------------------------------ *
@@ -87,7 +88,9 @@ static const char *tags[] = { "w1", "w2", "w3", "w4", "m1", "m2", "p4", "p3", "p
 
 /* ---- window rules ---------------------------------------------------- *
  * Match by class / instance (WM_CLASS) and/or title substring, and/or window
- * type. A NULL match field matches anything. `tag` is a tag NAME or 1-based
+ * type. class/instance/title matching is a CASE-INSENSITIVE substring, so
+ * "pinentry" matches res_class "Pinentry-gtk". A NULL match field matches
+ * anything. `tag` is a tag NAME or 1-based
  * number (NULL/"" = keep current tag). `wintype` matches _NET_WM_WINDOW_TYPE_*
  * — write it as WTYPE "DIALOG" etc. Later matching rules win per field. */
 #define WTYPE "_NET_WM_WINDOW_TYPE_"
@@ -100,7 +103,7 @@ static const Rule rules[] = {
 	{ NULL,                 NULL,     "is sharing your screen",     NULL,  NULL,            1 },
 	{ "chromium-personal",  NULL,     NULL,                         "p1",  NULL,            0 },
 	{ "chromium-work",      NULL,     NULL,                         "w1",  NULL,            0 },
-	{ "pinentry-gtk",       NULL,     NULL,                         NULL,  NULL,            1 },
+	{ "Pinentry",           NULL,     NULL,                         NULL,  NULL,            1 },
 	/* catch-all: float any dialog/utility/toolbar/splash from any app */
 	{ NULL,                 NULL,     NULL,                         NULL,  WTYPE "DIALOG",  1 },
 	{ NULL,                 NULL,     NULL,                         NULL,  WTYPE "UTILITY", 1 },
