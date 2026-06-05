@@ -186,7 +186,7 @@ static void resizeclient(Client *c, int x, int y, int w, int h);
 static void resizerequest(XEvent *e);
 static void restack(Monitor *m);
 static void maskroundrect(Pixmap mask, GC g, int x, int y, int w, int h, int rad);
-static void roundwin(Window win, int w, int h, int rad);
+static void roundwin(Window win, int w, int h, int rad, int bw);
 static void run(void);
 static void scan(void);
 static int sendevent(Window w, Atom proto, int mask, long d0, long d1, long d2, long d3, long d4);
@@ -688,7 +688,15 @@ focus(Client *c)
 		detachstack(c);
 		attachstack(c);
 		grabbuttons(c, 1);
-		XSetWindowBorder(dpy, c->win, scheme[SchemeSel][ColBorder].pixel & 0x00ffffff);
+		/* match the focused border to the selected-workspace pill colour
+		 * (SchemeSel background / "selbg") rather than a separate "selborder".
+		 * Use the un-premultiplied .color, since .pixel has RGB premultiplied
+		 * by selbgalpha (which would darken/hide the border). */
+		XSetWindowBorder(dpy, c->win,
+		                 0xff000000UL /* opaque: ARGB client windows hide an alpha-0 border */
+		               | ((unsigned long)(scheme[SchemeSel][ColBg].color.red   >> 8) << 16)
+		               | ((unsigned long)(scheme[SchemeSel][ColBg].color.green >> 8) <<  8)
+		               |  (unsigned long)(scheme[SchemeSel][ColBg].color.blue  >> 8));
 		setfocus(c);
 	} else {
 		XSetInputFocus(dpy, root, RevertToPointerRoot, CurrentTime);
@@ -724,7 +732,7 @@ unfocus(Client *c, int setfocus)
 	if (!c)
 		return;
 	grabbuttons(c, 0);
-	XSetWindowBorder(dpy, c->win, scheme[SchemeNorm][ColBorder].pixel & 0x00ffffff);
+	XSetWindowBorder(dpy, c->win, (scheme[SchemeNorm][ColBorder].pixel & 0x00ffffff) | 0xff000000UL);
 	if (setfocus) {
 		XSetInputFocus(dpy, root, RevertToPointerRoot, CurrentTime);
 		XDeleteProperty(dpy, root, netatom[NetActiveWindow]);
@@ -1441,7 +1449,7 @@ resizeclient(Client *c, int x, int y, int w, int h)
 	XConfigureWindow(dpy, c->win, CWX|CWY|CWWidth|CWHeight|CWBorderWidth, &wc);
 	configure(c);
 	if (roundcorners && !c->isfullscreen)
-		roundwin(c->win, w, h, cornerradius);
+		roundwin(c->win, w, h, cornerradius, c->bw);
 	else
 		clearround(c->win);
 	XSync(dpy, False);
@@ -1515,20 +1523,26 @@ maskroundrect(Pixmap mask, GC g, int x, int y, int w, int h, int rad)
 }
 
 void
-roundwin(Window win, int w, int h, int rad)
+roundwin(Window win, int w, int h, int rad, int bw)
 {
 	Pixmap mask;
 	GC g;
+	int W = w + 2 * bw, H = h + 2 * bw;
 
-	if (!shapeext || rad <= 0 || w <= 0 || h <= 0)
+	if (!shapeext || rad <= 0 || W <= 0 || H <= 0)
 		return;
-	mask = XCreatePixmap(dpy, win, w, h, 1);
+	/* The ShapeBounding region must include the border, which sits OUTSIDE the
+	 * w*h content (at window-relative offset -bw). A content-only mask shapes
+	 * the border away entirely, so it never renders. Build a mask covering
+	 * content+border and combine it at offset -bw so it starts at the border's
+	 * outer edge; round the outer corners by rad+bw to keep the border even. */
+	mask = XCreatePixmap(dpy, win, W, H, 1);
 	g = XCreateGC(dpy, mask, 0, NULL);
 	XSetForeground(dpy, g, 0);
-	XFillRectangle(dpy, mask, g, 0, 0, w, h);
+	XFillRectangle(dpy, mask, g, 0, 0, W, H);
 	XSetForeground(dpy, g, 1);
-	maskroundrect(mask, g, 0, 0, w, h, rad);
-	XShapeCombineMask(dpy, win, ShapeBounding, 0, 0, mask, ShapeSet);
+	maskroundrect(mask, g, 0, 0, W, H, rad + bw);
+	XShapeCombineMask(dpy, win, ShapeBounding, -bw, -bw, mask, ShapeSet);
 	XFreeGC(dpy, g);
 	XFreePixmap(dpy, mask);
 }
@@ -2029,6 +2043,8 @@ clientmessage(XEvent *e)
 				XSelectInput(dpy, c->win, StructureNotifyMask | PropertyChangeMask | ResizeRedirectMask);
 		}
 			XReparentWindow(dpy, c->win, systray->win, 0, 0);
+			/* inherit the tray window's background so the icon's surround is
+			 * exactly the tray-bar colour (XEmbed standard) */
 			XSetWindowBackgroundPixmap(dpy, c->win, ParentRelative);
 			sendevent(c->win, netatom[Xembed], StructureNotifyMask, CurrentTime, XEMBED_EMBEDDED_NOTIFY, 0, systray->win, XEMBED_EMBEDDED_VERSION);
 			XSync(dpy, False);
@@ -2306,7 +2322,7 @@ manage(Window w, XWindowAttributes *wa)
 
 	wc.border_width = c->bw;
 	XConfigureWindow(dpy, w, CWBorderWidth, &wc);
-	XSetWindowBorder(dpy, w, scheme[SchemeNorm][ColBorder].pixel & 0x00ffffff);
+	XSetWindowBorder(dpy, w, (scheme[SchemeNorm][ColBorder].pixel & 0x00ffffff) | 0xff000000UL);
 	configure(c);
 	updatewindowtype(c);
 	updatesizehints(c);
@@ -2566,21 +2582,30 @@ updatesystray(void)
 	if (!m)
 		return;
 
+	/* Opaque tray background in the DEFAULT (24-bit) visual. The systray uses
+	 * the default visual (not the bar's 32-bit ARGB one) so legacy GTK tray
+	 * apps create 24-bit icons that inherit this background via ParentRelative
+	 * instead of painting their own opaque theme background. 24-bit has no
+	 * alpha, so the pill is opaque (the SchemeStatus base colour). */
+	unsigned long traybg = ((unsigned long)(scheme[SchemeStatus][ColBg].color.red   >> 8) << 16)
+	                     | ((unsigned long)(scheme[SchemeStatus][ColBg].color.green >> 8) <<  8)
+	                     |  (unsigned long)(scheme[SchemeStatus][ColBg].color.blue  >> 8);
+
 	if (!systray) {
 		systray = ecalloc(1, sizeof(Systray));
 		wa.override_redirect = True;
 		wa.event_mask = ButtonPressMask | ExposureMask;
-		wa.background_pixel = fillcol[SchemeStatus].pixel; /* same pill bg as the segments */
+		wa.background_pixel = traybg;
 		wa.border_pixel = 0;
-		wa.colormap = cmap;
-		systray->win = XCreateWindow(dpy, root, m->mx + m->mw, m->by, 1, bh, 0, depth,
-		                             InputOutput, visual,
-		                             CWOverrideRedirect | CWEventMask | CWBackPixel | CWBorderPixel | CWColormap, &wa);
+		systray->win = XCreateWindow(dpy, root, m->mx + m->mw, m->by, 1, bh, 0,
+		                             DefaultDepth(dpy, screen), InputOutput,
+		                             DefaultVisual(dpy, screen),
+		                             CWOverrideRedirect | CWEventMask | CWBackPixel | CWBorderPixel, &wa);
 		XSelectInput(dpy, systray->win, SubstructureNotifyMask | ButtonPressMask | ExposureMask);
 		XChangeProperty(dpy, systray->win, netatom[NetSystemTrayOrientation], XA_CARDINAL, 32,
 		                PropModeReplace, (unsigned char *)&netatom[NetSystemTrayOrientationHorz], 1);
 		{
-			long v = XVisualIDFromVisual(visual);
+			long v = XVisualIDFromVisual(DefaultVisual(dpy, screen));
 			XChangeProperty(dpy, systray->win, netatom[NetSystemTrayVisual], XA_VISUALID, 32,
 			                PropModeReplace, (unsigned char *)&v, 1);
 		}
@@ -2615,11 +2640,11 @@ updatesystray(void)
 	} else {
 		unsigned int tw = w + 2 * pad;
 		x = m->mx + m->mw - barmargin - tw;
-		XSetWindowBackground(dpy, systray->win, fillcol[SchemeStatus].pixel);
+		XSetWindowBackground(dpy, systray->win, traybg);
 		XMoveResizeWindow(dpy, systray->win, x, m->by, tw, bh);
 		XClearWindow(dpy, systray->win);
 		if (roundcorners)
-			roundwin(systray->win, tw, bh, segradius);
+			roundwin(systray->win, tw, bh, segradius, 0);
 		else
 			clearround(systray->win);
 	}
