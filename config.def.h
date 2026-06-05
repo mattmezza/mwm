@@ -28,7 +28,7 @@ static char *fonts[] = { "monospace:size=10" };
 static const char *layoutsym[] = { "|||", "||=", "><>" };
 static const int defaultlayout  = 1;
 static const unsigned int nmaster = 1;       /* clients in the master area (stack layout) */
-static float mfact                = 0.55f;   /* master area width fraction               */
+static float mfact                = 0.50f;   /* master area width fraction               */
 
 /* ---- bar ------------------------------------------------------------- */
 static const int topbar       = 1;    /* 1 = bar on top, 0 = bottom         */
@@ -44,7 +44,7 @@ static const int titlealign   = 0;    /* center pill (title) justify: 0=left, 1=
 
 /* ---- system tray ----------------------------------------------------- */
 static const int showsystray            = 1;  /* embed an XEmbed system tray        */
-static const int showtraybar            = 1;  /* 1 = show the tray at startup
+static const int showtraybar            = 0;  /* 1 = show the tray at startup
                                                  (needs showsystray; toggle live with
                                                  `mwmc traybar toggle`)             */
 static const int systraymon             = 0;  /* monitor index whose bar hosts it   */
