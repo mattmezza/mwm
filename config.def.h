@@ -2,9 +2,9 @@
  * Recompile (make) and restart mwm to apply changes (suckless style). */
 
 /* ---- appearance ------------------------------------------------------ */
-static unsigned int borderpx         = 2;    /* client border width in pixels   */
+static unsigned int borderpx         = 3;    /* client border width in pixels   */
 static unsigned int gappx            = 7;   /* gap between/around windows      */
-static const int roundcorners        = 1;    /* round client corners via X Shape;
+static const int roundcorners        = 0;    /* round client corners via X Shape;
                                                 set 0 if your compositor already
                                                 rounds corners (picom etc.)     */
 static int cornerradius              = 3;   /* client corner radius (px); needs roundcorners=1.
@@ -39,7 +39,7 @@ static int barpadx            = 10;   /* horizontal text padding in pills   */
 static int barmargin          = 7;   /* horizontal gap: screen left/right edge to the pills */
 static int barvmargin         = 5;    /* vertical gap: top/bottom screen edge to the bar      */
 static int barseggap          = 8;    /* gap between left/center/right pills */
-static int segradius          = 5;    /* pill corner radius (0 = square)    */
+static int segradius          = 3;    /* pill corner radius (0 = square)    */
 static const int titlealign   = 0;    /* center pill (title) justify: 0=left, 1=center, 2=right */
 
 /* ---- system tray ----------------------------------------------------- */
