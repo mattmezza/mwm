@@ -44,6 +44,9 @@ static const int titlealign   = 0;    /* center pill (title) justify: 0=left, 1=
 
 /* ---- system tray ----------------------------------------------------- */
 static const int showsystray            = 1;  /* embed an XEmbed system tray        */
+static const int showtraybar            = 1;  /* 1 = show the tray at startup
+                                                 (needs showsystray; toggle live with
+                                                 `mwmc traybar toggle`)             */
 static const int systraymon             = 0;  /* monitor index whose bar hosts it   */
 static const unsigned int systrayspacing = 4; /* gap between tray icons             */
 static const int systrayvertpad         = 4;  /* vertical inset of icons in the bar */

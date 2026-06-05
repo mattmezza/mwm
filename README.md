@@ -99,7 +99,8 @@ mwmc win close
 # mouse: hold Super and drag = move, Super + right-drag = resize (config: movemod)
 
 # BAR / session
-mwmc bar toggle|show|hide
+mwmc bar toggle|show|hide            # show/hide the bar
+mwmc traybar toggle|show|hide        # show/hide the system tray
 mwmc reload | mwmc quit | mwmc version
 
 # INTROSPECTION — for scripts, menus, and external keybinders

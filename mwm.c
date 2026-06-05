@@ -207,6 +207,7 @@ static int tagcount(void);
 static int taglabel(int t, char *buf, size_t n);
 static void tile(Monitor *m, int t);
 static void togglebar(void);
+static void toggletraybar(void);
 static void togglefloating(void);
 static void togglefullscreen(void);
 static void togglesticky(void);
@@ -1093,6 +1094,7 @@ setgap(const char *arg)
 }
 
 static int barvisible = 1;
+static int systrayvisible = 1;
 
 void
 togglebar(void)
@@ -1122,6 +1124,17 @@ togglebar(void)
 	if (showsystray)
 		updatesystray();
 	arrange(NULL);
+}
+
+void
+toggletraybar(void)
+{
+	if (!showsystray)
+		return;
+	systrayvisible = !systrayvisible;
+	/* drawbar reclaims the status pill's space (getsystraywidth -> 0 when
+	 * hidden) and updatesystray (un)maps the tray window + its icons */
+	drawbars();
 }
 
 /* ---- client state actions ------------------------------------------- */
@@ -2188,8 +2201,15 @@ dispatchcmd(int argc, char **argv, char *reply, size_t rsz)
 		if (argc > 1) setgap(noun);
 		else { snprintf(reply, rsz, "error: gap +5|-5|<px>"); return; }
 	} else if (EQ(verb, "bar")) {
-		if (EQ(noun, "toggle") || EQ(noun, "show") || EQ(noun, "hide")) togglebar();
+		if (EQ(noun, "toggle")) togglebar();
+		else if (EQ(noun, "show")) { if (!barvisible) togglebar(); }
+		else if (EQ(noun, "hide")) { if (barvisible) togglebar(); }
 		else { snprintf(reply, rsz, "error: bar toggle|show|hide"); return; }
+	} else if (EQ(verb, "traybar")) {
+		if (EQ(noun, "toggle")) toggletraybar();
+		else if (EQ(noun, "show")) { if (!systrayvisible) toggletraybar(); }
+		else if (EQ(noun, "hide")) { if (systrayvisible) toggletraybar(); }
+		else { snprintf(reply, rsz, "error: traybar toggle|show|hide"); return; }
 	} else if (EQ(verb, "win")) {
 		if (EQ(noun, "close")) killfocused();
 		else if (EQ(noun, "move")) {
@@ -2270,6 +2290,7 @@ dispatchcmd(int argc, char **argv, char *reply, size_t rsz)
 		    "  layout cols|stack|float|next|prev\n"
 		    "  master +1|-1|<n> | master ratio +0.05|-0.05|<f>\n"
 		    "  gap +5|-5|<px> | bar toggle|show|hide\n"
+		    "  traybar toggle|show|hide\n"
 		    "  win close | win tag <name> | win toggle float|full|sticky\n"
 		    "  win move <dx> <dy> | win resize <dw> <dh> | win center\n"
 		    "  query tags|windows|monitors|layout|state\n"
@@ -2490,7 +2511,7 @@ getsystraywidth(void)
 	int n = 0;
 	Client *i;
 
-	if (!showsystray || !systray)
+	if (!showsystray || !systray || !systrayvisible)
 		return 0;
 	for (i = systray->icons; i; i = i->next) {
 		w += i->w + systrayspacing;
@@ -2622,6 +2643,15 @@ updatesystray(void)
 			systray = NULL;
 			return;
 		}
+	}
+
+	/* tray hidden via `mwmc traybar toggle`: keep owning the selection (so
+	 * icons still dock and are tracked) but unmap the window and its icons */
+	if (!systrayvisible) {
+		for (i = systray->icons; i; i = i->next)
+			XUnmapWindow(dpy, i->win);
+		XUnmapWindow(dpy, systray->win);
+		return;
 	}
 
 	int pad = lrpad / 2; /* match the bar pills' left/right padding */
@@ -3204,6 +3234,10 @@ setup(void)
 	/* override styling defaults from xrdb / ~/.Xresources before anything
 	 * (fonts, colors, geometry) is read */
 	load_xresources();
+
+	/* initial bar / tray visibility (live-toggled via mwmc bar|traybar) */
+	barvisible = showbar;
+	systrayvisible = showtraybar;
 
 	/* prefer a 32-bit ARGB visual so the bar can be translucent */
 	if (XMatchVisualInfo(dpy, screen, 32, TrueColor, &vinfo)) {
