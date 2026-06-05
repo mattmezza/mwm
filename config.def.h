@@ -89,18 +89,20 @@ static const char *tags[] = { "w1", "w2", "w3", "w4", "m1", "m2", "p4", "p3", "p
  * — write it as WTYPE "DIALOG" etc. Later matching rules win per field. */
 #define WTYPE "_NET_WM_WINDOW_TYPE_"
 static const Rule rules[] = {
-    /* class                instance  title         tag    wintype          isfloating */
-	{ "pavucontrol",        NULL,     NULL,         NULL,  NULL,            1 },
-	{ "arandr",             NULL,     NULL,         NULL,  NULL,            1 },
-	{ "st-256color",        NULL,     "termfloat",  NULL,  NULL,            1 },
-	{ "st-256color",        NULL,     "calcfloat",  NULL,  NULL,            1 },
-	{ "chromium-personal",  NULL,     NULL,         "p1",  NULL,            0 },
-	{ "chromium-work",      NULL,     NULL,         "w1",  NULL,            0 },
+    /* class                instance  title                         tag    wintype          isfloating */
+	{ "pavucontrol",        NULL,     NULL,                         NULL,  NULL,            1 },
+	{ "arandr",             NULL,     NULL,                         NULL,  NULL,            1 },
+	{ "st-256color",        NULL,     "termfloat",                  NULL,  NULL,            1 },
+	{ "st-256color",        NULL,     "calcfloat",                  NULL,  NULL,            1 },
+	{ NULL,                 NULL,     "is sharing your screen",     NULL,  NULL,            1 },
+	{ "chromium-personal",  NULL,     NULL,                         "p1",  NULL,            0 },
+	{ "chromium-work",      NULL,     NULL,                         "w1",  NULL,            0 },
+	{ "pinentry-gtk",       NULL,     NULL,                         NULL,  NULL,            1 },
 	/* catch-all: float any dialog/utility/toolbar/splash from any app */
-	{ NULL,                 NULL,     NULL,         NULL,  WTYPE "DIALOG",  1 },
-	{ NULL,                 NULL,     NULL,         NULL,  WTYPE "UTILITY", 1 },
-	{ NULL,                 NULL,     NULL,         NULL,  WTYPE "TOOLBAR", 1 },
-	{ NULL,                 NULL,     NULL,         NULL,  WTYPE "SPLASH",  1 },
+	{ NULL,                 NULL,     NULL,                         NULL,  WTYPE "DIALOG",  1 },
+	{ NULL,                 NULL,     NULL,                         NULL,  WTYPE "UTILITY", 1 },
+	{ NULL,                 NULL,     NULL,                         NULL,  WTYPE "TOOLBAR", 1 },
+	{ NULL,                 NULL,     NULL,                         NULL,  WTYPE "SPLASH",  1 },
 };
 
 /* ---- tag -> monitor rules -------------------------------------------- *
