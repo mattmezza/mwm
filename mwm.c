@@ -2698,11 +2698,13 @@ updatesystray(void)
 		}
 	}
 
-	/* tray hidden via `mwmc traybar toggle`: keep owning the selection (so
-	 * icons still dock and are tracked) but unmap the window and its icons */
+	/* tray hidden via `mwmc traybar toggle`: unmap ONLY the container window.
+	 * The icons are reparented children of it, so they vanish with it but stay
+	 * mapped in their own right — do NOT unmap them individually, or the
+	 * resulting UnmapNotify makes unmapnotify() call removesystrayicon() and the
+	 * icons are gone for good (they never reappear on show). We keep owning the
+	 * tray selection while hidden so new icons still dock. */
 	if (!systrayvisible) {
-		for (i = systray->icons; i; i = i->next)
-			XUnmapWindow(dpy, i->win);
 		XUnmapWindow(dpy, systray->win);
 		return;
 	}
