@@ -2346,7 +2346,8 @@ dispatchcmd(int argc, char **argv, char *reply, size_t rsz)
 		    "  win close | win tag <name> | win toggle float|full|sticky\n"
 		    "  win move <dx> <dy> | win resize <dw> <dh> | win center\n"
 		    "  query tags|windows|monitors|layout|state\n"
-		    "  reload (re-read Xresources) | quit | version\n");
+		    "  reload (re-read Xresources) | quit | version\n"
+		    "  completions bash|zsh (mwmc client-side; print shell completion)\n");
 		return;
 	} else {
 		snprintf(reply, rsz, "error: unknown command '%s' (try: mwmc help)", verb);
