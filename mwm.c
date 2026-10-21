@@ -254,6 +254,12 @@ static void zoom(void);
 /* variables */
 static const char broken[] = "broken";
 static char stext[512];
+/* Bounded cache: external status text must never grow allocations unbounded. */
+static struct {
+	char name[8];
+	Clr color;
+} statuscolors[16];
+static unsigned int nstatuscolors, nextstatuscolor;
 static int screen;
 static int sw, sh;              /* X display screen geometry width, height */
 static int bh;                  /* bar height */
@@ -1617,6 +1623,92 @@ shapebar(Monitor *m, int rects[][2], int n)
 
 /* ---- the bar --------------------------------------------------------- */
 
+/* Status commands: ^c#RRGGBB^ changes foreground, ^d^ restores it.
+ * Width and drawing share the parser; everything else stays literal text. */
+static Clr
+statuscolor(const char *name)
+{
+	Clr color;
+	unsigned int i;
+
+	for (i = 0; i < nstatuscolors; i++)
+		if (!strcmp(statuscolors[i].name, name))
+			return statuscolors[i].color;
+	/* Unlike drw_clr_create, allocation failure here must not terminate mwm. */
+	if (!XftColorAllocName(dpy, drw->visual, drw->cmap, name, &color))
+		return scheme[SchemeStatus][ColFg];
+	if (nstatuscolors < LENGTH(statuscolors))
+		i = nstatuscolors++;
+	else {
+		i = nextstatuscolor;
+		nextstatuscolor = (nextstatuscolor + 1) % LENGTH(statuscolors);
+		XftColorFree(dpy, drw->visual, drw->cmap, &statuscolors[i].color);
+	}
+	memcpy(statuscolors[i].name, name, 8);
+	statuscolors[i].color = color;
+	return color;
+}
+
+static int
+statustext(int x, int w)
+{
+	char buf[sizeof stext], name[8];
+	size_t pos = 0, start = 0, len = strlen(stext), n, i;
+	int cmd, runw, total = 0, render = w > 0;
+	Clr scm[3];
+
+	memcpy(scm, scheme[SchemeStatus], sizeof scm);
+	if (render) {
+		x += lrpad / 2;
+		w = MAX(0, w - lrpad);
+		drw_setscheme(drw, scm);
+	}
+	while (pos <= len) {
+		cmd = 0;
+		if (len - pos >= 3 && !memcmp(stext + pos, "^d^", 3))
+			cmd = 3;
+		else if (len - pos >= 10 && !memcmp(stext + pos, "^c#", 3)
+		         && stext[pos + 9] == '^') {
+			for (i = 3; i < 9; i++)
+				if (!isxdigit((unsigned char)stext[pos + i]))
+					break;
+			if (i == 9)
+				cmd = 10;
+		}
+		if (cmd || pos == len) {
+			n = pos - start;
+			if (n) {
+				memcpy(buf, stext + start, n);
+				buf[n] = '\0';
+				runw = drw_fontset_getwidth(drw, buf);
+				total += runw;
+				if (render && w > 0) {
+					drw_text(drw, x, 0, MIN(w, runw), bh, 0, buf, 0);
+					x += MIN(w, runw);
+					w -= MIN(w, runw);
+				}
+			}
+			if (pos == len)
+				break;
+			if (render && w > 0) {
+				if (cmd == 3)
+					scm[ColFg] = scheme[SchemeStatus][ColFg];
+				else {
+					memcpy(name, stext + pos + 2, 7);
+					name[7] = '\0';
+					scm[ColFg] = statuscolor(name);
+				}
+			}
+			pos += cmd;
+			start = pos;
+		} else
+			pos++;
+	}
+	if (render)
+		drw_setscheme(drw, scheme[SchemeStatus]);
+	return total + lrpad;
+}
+
 void
 drawbar(Monitor *m)
 {
@@ -1684,7 +1776,7 @@ drawbar(Monitor *m)
 	}
 
 	/* ---- RIGHT: status text ---- */
-	rw = stext[0] ? TEXTW(stext) : 0;
+	rw = stext[0] ? statustext(0, 0) : 0;
 	rightedge = m->mw - barmargin - (sysw ? sysw + barseggap : 0);
 	if (rw > 0) {
 		if (rw > rightedge - barmargin)
@@ -1692,7 +1784,7 @@ drawbar(Monitor *m)
 		pills[np][0] = rightedge - rw; pills[np][1] = rw; np++;
 		drw_roundrect(drw, rightedge - rw, 0, rw, bh, segradius, &fillcol[SchemeStatus]);
 		drw_setscheme(drw, scheme[SchemeStatus]);
-		drw_text(drw, rightedge - rw, 0, rw, bh, lrpad / 2, stext, 0);
+		statustext(rightedge - rw, rw);
 	}
 
 	/* ---- CENTER: focused window title ---- */
@@ -3437,6 +3529,8 @@ cleanup(void)
 	}
 	free(scheme);
 	free(fillcol);
+	for (unsigned int i = 0; i < nstatuscolors; i++)
+		XftColorFree(dpy, drw->visual, drw->cmap, &statuscolors[i].color);
 	XDestroyWindow(dpy, wmcheckwin);
 	drw_free(drw);
 	XSync(dpy, False);

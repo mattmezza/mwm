@@ -31,6 +31,10 @@ is driven at runtime through the `mwmc` client over a pure-X11 IPC channel
   configurable background/alpha (alpha 0 = no background).
 - **System tray** (freedesktop XEmbed) embedded in the bar.
 - **Status from the root window name**, so **slstatus works unmodified**.
+  Optional `^c#RRGGBB^` changes the text color and `^d^` restores the configured
+  status foreground, e.g. `RAM ^c#FFF600^23.7G^d^`. Commands do not consume bar
+  space; malformed commands appear literally. Colors use a bounded 16-entry
+  cache; allocation failure falls back to the configured foreground.
 - **Font support** via Xft (with fallback fonts).
 - **Window rules**: match by class/instance/title and/or `_NET_WM_WINDOW_TYPE`
   to auto-place a window on a tag (by **name** or number) and/or float it —
