@@ -44,7 +44,9 @@ usage(void)
 	"  win center                      center a floating window\n"
 	"  (mouse: hold Super and drag = move, Super + right-drag = resize)\n"
 	"  query tags|windows|monitors|layout|state\n"
-	"  reload                          re-read Xresources (xrdb) and restyle live\n"
+	"  palette                         open the searchable command palette\n"
+	"  reload                          re-read config.ini and Xresources live\n"
+	"  restart                         replace mwm in place and restore the session\n"
 	"  completions bash|zsh            print a shell completion script (redirect it,\n"
 	"                                  e.g. mwmc completions bash > \\\n"
 	"                                  ~/.local/share/bash-completion/completions/mwmc)\n"
@@ -121,7 +123,8 @@ main(int argc, char *argv[])
 	XSendEvent(dpy, root, False, SubstructureRedirectMask | SubstructureNotifyMask, &ev);
 	XFlush(dpy);
 
-	/* wait for mwm to set the reply property on our window (with timeout) */
+	/* Restart replies arrive after validation, exec, and session restoration. */
+	int timeout = !strcmp(argv[1], "restart") ? 15000 : REPLY_TIMEOUT_MS;
 	fd = ConnectionNumber(dpy);
 	for (;;) {
 		while (XPending(dpy)) {
@@ -148,7 +151,7 @@ main(int argc, char *argv[])
 		}
 		{
 			struct pollfd pfd = { fd, POLLIN, 0 };
-			int pr = poll(&pfd, 1, REPLY_TIMEOUT_MS);
+			int pr = poll(&pfd, 1, timeout);
 			if (pr == 0) {
 				fprintf(stderr, "mwmc: timed out waiting for mwm (is it running?)\n");
 				rc = 1;

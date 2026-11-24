@@ -2,7 +2,7 @@
 # Example ~/.xinitrc for running mwm. Copy to ~/.xinitrc and `startx`.
 
 # Optional: a compositor for real bar translucency and shadows. If picom
-# already rounds window corners, set `roundcorners = 0` in config.h.
+# already rounds window corners, set `roundcorners = 0` under [layout] in config.ini.
 picom --config "$HOME/.config/picom/picom.conf" &
 
 # Status line: slstatus writes the root window name, which mwm renders in the

@@ -116,8 +116,15 @@ center a floating window on its monitor.
 .B query tags|windows|monitors|layout|state
 print machine\-readable state for scripts, menus, and external keybinders.
 .TP
+.B palette
+open the searchable command palette.
+.TP
 .B reload
-re\-read Xresources (xrdb) and restyle the running instance live.
+re-read config.ini and Xresources in the running window manager.
+.TP
+.B restart
+load a replacement from the running mwm executable's path.
+Preserves the X session, managed windows, tags, layouts, focus, tray and active timer.
 .TP
 .B quit
 ask mwm to exit.

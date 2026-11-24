@@ -4,13 +4,14 @@ mwm \- matteo's window manager
 .SH SYNOPSIS
 .B mwm
 .RB [ \-v ]
+.RI [ \-c " FILE" ]
 .SH DESCRIPTION
 .B mwm
 is a small dynamic tiling window manager for X. It manages windows in two
 tiling layouts (equal columns and master+stack) plus floating, with
-configurable gaps and optional rounded corners. It draws a translucent,
-three\-segment bar (tags+layout, focused title, and status read from the root
-window name) and embeds an XEmbed system tray.
+configurable gaps and optional rounded corners. Its CUI bar includes tags,
+the focused title, root-window status, an XEmbed tray, an interactive calendar,
+world clocks and a timer.
 .PP
 mwm has no built\-in keybindings. All control happens through the
 .BR mwmc (1)
@@ -22,6 +23,9 @@ windows.
 .TP
 .B \-v
 print version information to stderr, then exit.
+.TP
+.BI \-c " FILE"
+read settings from FILE.
 .SH USAGE
 Start mwm from your
 .B ~/.xinitrc :
@@ -47,11 +51,17 @@ See
 .B mwmc help
 for the full command grammar.
 .SH CONFIGURATION
-mwm is configured by editing
-.B config.h
-and recompiling. See
-.B config.def.h
-for the documented defaults.
+mwm reads
+.B $XDG_CONFIG_HOME/mwm/config.ini
+or
+.B ~/.config/mwm/config.ini
+and applies Xresources for appearance. Use
+.B mwmc reload
+to re-read both. The source includes an example in examples/config.ini.
+.PP
+After installing a replacement to the running mwm executable's path, use
+.B mwmc restart
+to load it in place and restore the existing session.
 .SH SEE ALSO
 .BR mwmc (1),
 .BR sxhkd (1),

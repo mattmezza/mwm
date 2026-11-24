@@ -17,7 +17,7 @@ _mwmc()
         cword=$COMP_CWORD
     fi
 
-    local verbs="focus move swap layout master gap bar traybar win query reload quit version help kill completions"
+    local verbs="focus move swap layout master gap bar traybar win query palette reload restart quit version help kill completions"
 
     # top-level verb
     if [ "$cword" -eq 1 ]; then

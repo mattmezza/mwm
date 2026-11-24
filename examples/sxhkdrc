@@ -10,6 +10,8 @@ super + d
 	dmenu_run
 
 # --- focus ---
+super + p
+	mwmc palette
 super + j
 	mwmc focus next
 super + k

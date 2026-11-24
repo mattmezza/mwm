@@ -1,28 +1,15 @@
 # mwm version
-VERSION = 0.1
+VERSION = 0.1.0
 
-# paths
 PREFIX    = /usr/local
 MANPREFIX = $(PREFIX)/share/man
 
-# Xinerama (multi-monitor). Comment these two lines out to build without it.
+# Comment these lines out to build without Xinerama.
 XINERAMALIBS  = -lXinerama
 XINERAMAFLAGS = -DXINERAMA
 
-# freetype / fontconfig
-FREETYPELIBS = -lfontconfig -lXft
-FREETYPEINC  = /usr/include/freetype2
-# OpenBSD (uncomment)
-#FREETYPEINC = $(X11INC)/freetype2
-
-# includes and libs
-INCS = -I$(FREETYPEINC)
-LIBS = -lX11 -lXext $(XINERAMALIBS) $(FREETYPELIBS)
-
-# flags
-CPPFLAGS = -D_DEFAULT_SOURCE -D_BSD_SOURCE -D_POSIX_C_SOURCE=200809L -DVERSION=\"$(VERSION)\" $(XINERAMAFLAGS)
-CFLAGS   = -std=c99 -pedantic -Wall -Wno-deprecated-declarations -Os $(INCS) $(CPPFLAGS)
-LDFLAGS  = $(LIBS)
-
-# compiler and linker
+CPPFLAGS = -D_DEFAULT_SOURCE -D_POSIX_C_SOURCE=200809L -DVERSION=\"$(VERSION)\" $(XINERAMAFLAGS) -I$(CUI_SOURCE)/include
+CFLAGS   = -std=c11 -pedantic -Wall -Wextra -Wno-deprecated-declarations -Os
+LIBS     = -lX11 -lXext -lXrender $(XINERAMALIBS) -lfontconfig -lfreetype -lharfbuzz -lm
+X11_LIBS = -lX11
 CC = cc

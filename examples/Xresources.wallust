@@ -9,12 +9,13 @@
 !     xrdb -merge ~/.Xresources && mwmc reload
 ! (put that in your wallpaper/wallust hook to retheme live.)
 !
-! Alphas (translucency) and geometry stay at the config.h defaults — wallust
+! Alphas (translucency) and geometry stay at the config.ini defaults — wallust
 ! doesn't provide them. Add mwm.*alpha / mwm.gappx etc. with plain numbers if
 ! you want them themed too.
 
 ! ---- mwm (matteo's window manager) ----
-mwm.font:       monospace:size=10
+mwm.font:       Geist:pixelsize=14
+mwm.monofont:   Geist Mono
 
 mwm.normfg:     {{foreground}}
 mwm.normbg:     {{background}}

@@ -13,3 +13,6 @@ completions.h
 *~
 .*.swp
 .DS_Store
+
+.deps/
+dist/
