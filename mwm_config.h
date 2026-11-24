@@ -5,7 +5,7 @@
 #include <X11/Xlib.h>
 #include <time.h>
 
-enum { MAX_TAGS = 100, MAX_RULES = 64, MAX_ZONES = 8, CONFIG_ERROR = 768 };
+enum { MAX_TAGS = 100, MAX_RULES = 64, MAX_ZONES = 8, MAX_TIMER_PRESETS = 5, CONFIG_ERROR = 768 };
 enum { SchemeNorm, SchemeSel, SchemeUrg, SchemeTitle, SchemeStatus, SchemeBar, SchemeLast };
 enum { ColFg, ColBg, ColBorder };
 
@@ -24,6 +24,7 @@ typedef struct {
 	float mfact;
 	int topbar, showbar, barheight, barvertpad, barpadx, barmargin, barvmargin;
 	int barseggap, segradius, titlealign, barfontsize;
+	int timerprogressheight;
 	int showsystray, showtraybar, systraymon, systrayspacing, systrayvertpad;
 	int panelradius, panel_opacity, calendar_width, clock_width, palette_width;
 	int duration, reduced_motion, shadows, shadow_opacity, bar_shadow_blur, panel_shadow_blur;
@@ -37,6 +38,7 @@ typedef struct {
 	int nrules;
 	TimeZone zones[MAX_ZONES];
 	int nzones;
+	int in_presets[MAX_TIMER_PRESETS], nin_presets, at_presets;
 	char hook[512];
 } Config;
 

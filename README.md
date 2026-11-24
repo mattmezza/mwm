@@ -207,8 +207,10 @@ The default config assigns tag 1 to monitor 0. Set `1 = -1` under
   **Alert me in** for a duration expressed as minutes, `HH:MM`, or `HH:MM:SS`,
   or **Alert me at** for the next occurrence of a 24-hour local `HH:MM`. The
   timer field is ready to type when the panel opens. Use the number row or
-  keypad, then press Enter or click **Set**. The bar marks an active timer and
-  the panel displays its countdown and a Cancel button.
+  keypad, then press Enter or click **Set**. Click a duration or upcoming local
+  hour in the quick-start row to start immediately. A thin progress line follows
+  the timer along the bottom of the hour, and the panel displays its countdown
+  and a Cancel button. Customize the quick-start row under `[clock]`.
 - Click the focused title or run `mwmc palette` to search for windows by title or
   class, jump to tags, or change layouts. Use Up, Down, and Enter to select.
   Escape and outside clicks dismiss the panels.

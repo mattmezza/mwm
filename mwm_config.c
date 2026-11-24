@@ -33,6 +33,7 @@ config_defaults(Config *c)
 		.defaultlayout = 1, .nmaster = 1, .mfact = 0.5f,
 		.topbar = 1, .showbar = 1, .barvertpad = 6, .barpadx = 12,
 		.barmargin = 6, .barvmargin = 6, .barseggap = 10, .segradius = 6, .barfontsize = 16,
+		.timerprogressheight = 2,
 		.showsystray = 1, .showtraybar = 1, .systraymon = -1, .systrayspacing = 7, .systrayvertpad = 6,
 		.panelradius = 6, .panel_opacity = 255, .calendar_width = 394, .clock_width = 448, .palette_width = 530,
 		.duration = 150, .shadows = 1, .shadow_opacity = 112, .bar_shadow_blur = 2, .panel_shadow_blur = 6,
@@ -47,6 +48,7 @@ config_defaults(Config *c)
 		},
 		.alpha = {255, 255, 255, 255, 255, 0},
 		.ntags = COUNT(tags), .nrules = COUNT(rules),
+		.in_presets = {10, 20, 30, 60, 90}, .nin_presets = 5, .at_presets = 5,
 	};
 	for (int i = 0; i < MAX_TAGS; ++i) {
 		if (i < c->ntags)
@@ -77,6 +79,7 @@ static const Setting settings[] = {
 	INT("bar", "barvmargin", barvmargin, 0, 48), INT("bar", "barseggap", barseggap, 0, 32),
 	INT("bar", "segradius", segradius, 0, 32), INT("bar", "titlealign", titlealign, 0, 2),
 	INT("bar", "barfontsize", barfontsize, 0, 28),
+	INT("bar", "timerprogressheight", timerprogressheight, 0, 5),
 	INT("tray", "showsystray", showsystray, 0, 1), INT("tray", "showtraybar", showtraybar, 0, 1),
 	INT("tray", "systraymon", systraymon, -1, 99), INT("tray", "systrayspacing", systrayspacing, 0, 24),
 	INT("tray", "systrayvertpad", systrayvertpad, 0, 24),
@@ -91,6 +94,7 @@ static const Setting settings[] = {
 	INT("motion", "bar_shadow_blur", bar_shadow_blur, 1, 5),
 	INT("motion", "panel_shadow_blur", panel_shadow_blur, 1, 12),
 	STR("clock", "timer_hook", hook), STR("theme", "font", font), STR("theme", "monofont", monofont),
+	INT("clock", "at_presets", at_presets, 0, MAX_TIMER_PRESETS),
 	STR("theme", "normfg", colors[SchemeNorm][ColFg]), STR("theme", "normbg", colors[SchemeNorm][ColBg]),
 	STR("theme", "normborder", colors[SchemeNorm][ColBorder]),
 	STR("theme", "selfg", colors[SchemeSel][ColFg]), STR("theme", "selbg", colors[SchemeSel][ColBg]),
@@ -238,6 +242,28 @@ read_rule(Rule *r, const char *key, const char *v)
 }
 
 static int
+read_presets(Config *c, const char *value)
+{
+	c->nin_presets = 0;
+	if (!*value)
+		return 1;
+	do {
+		char *end;
+		long minutes = strtol(value, &end, 10);
+		if (end == value || minutes < 1 || minutes > 1440 || c->nin_presets == MAX_TIMER_PRESETS)
+			return 0;
+		c->in_presets[c->nin_presets++] = minutes;
+		while (isspace((unsigned char)*end))
+			++end;
+		if (!*end)
+			return 1;
+		if (*end != ',')
+			return 0;
+		value = end + 1;
+	} while (1);
+}
+
+static int
 read_value(Config *c, const char *section, const char *key, const char *v, Rule *rule)
 {
 	int id;
@@ -250,6 +276,8 @@ read_value(Config *c, const char *section, const char *key, const char *v, Rule 
 	}
 	if (!strcmp(section, "tag_monitors") && integer(key, 1, MAX_TAGS, &id))
 		return integer(v, -1, 99, &c->tagmon[id - 1]);
+	if (!strcmp(section, "clock") && !strcmp(key, "in_presets"))
+		return read_presets(c, v);
 	if (!strcmp(section, "timezones")) {
 		for (id = 0; id < c->nzones; ++id)
 			if (!strcmp(c->zones[id].label, key))

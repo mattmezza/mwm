@@ -136,7 +136,8 @@ typedef struct {
 	int display_fd;
 	int selected, nmon, bar, tray, gap, gap_override;
 	size_t nclients, nicons;
-	ShellTimer timer;
+	/* Keep this v1 layout readable by the first binaries with live restart. */
+	struct { int active, at; double due; time_t wall; } timer;
 	Tag tags[MAX_TAGS];
 	RestartMonitor monitors[MaxMonitors];
 } RestartState;
@@ -1728,7 +1729,7 @@ buttonpress(XEvent *e)
 			setlayout(ev->button == Button3 ? "prev" : "next");
 		} else if (hit.action == ActTag && ev->button == Button1) {
 			char tag[16];
-			snprintf(tag, sizeof tag, "%d", hit.value + 1);
+			snprintf(tag, sizeof tag, "%d", (int)hit.value + 1);
 			viewtag(tag);
 		} else if (ev->button == Button1 &&
 		           (hit.action == ActClock || hit.action == ActCalendar || hit.action == ActPalette)) {
@@ -3336,7 +3337,8 @@ setup(const RestartState *state)
 		gap_overridden = state->gap_override;
 		if (gap_overridden)
 			gappx_run = state->gap;
-		timer = state->timer;
+		timer = (ShellTimer){.active = state->timer.active, .at = state->timer.at,
+		                     .due = state->timer.due, .wall = state->timer.wall};
 	}
 	updategeom(1);
 	if (settings.showsystray || systray)
@@ -3457,7 +3459,7 @@ save_session(FILE *file, Window requestor)
 		.root = root, .checkwin = wmcheckwin, .requestor = requestor,
 		.display_fd = ConnectionNumber(dpy), .selected = selmon->num,
 		.bar = barvisible, .tray = systrayvisible, .gap = gappx_run,
-		.gap_override = gap_overridden, .timer = timer,
+		.gap_override = gap_overridden, .timer = {timer.active, timer.at, timer.due, timer.wall},
 	};
 	memcpy(state.tags, tagstate, sizeof state.tags);
 	for (Monitor *m = mons; m; m = m->next)
@@ -3487,6 +3489,8 @@ save_session(FILE *file, Window requestor)
 	for (Client *i = systray ? systray->icons : NULL; i; i = i->next)
 		if (fwrite(&i->win, sizeof i->win, 1, file) != 1)
 			return 0;
+	if (fwrite(&timer.duration, sizeof timer.duration, 1, file) != 1)
+		return 0;
 	return fflush(file) == 0 && fseek(file, 0, SEEK_SET) == 0;
 }
 
@@ -3644,6 +3648,11 @@ resume_session(FILE *file, const RestartState *state)
 	    || fread(order, sizeof *order, state->nclients, file) != state->nclients
 	    || fread(icons, sizeof *icons, state->nicons, file) != state->nicons)
 		die("mwm: incomplete restart state");
+	double timer_duration = 0;
+	/* v0.1.1 and earlier end the handoff after the tray icons. */
+	size_t bytes = fread(&timer_duration, 1, sizeof timer_duration, file);
+	if (ferror(file) || (bytes && bytes != sizeof timer_duration))
+		die("mwm: incomplete timer state");
 	fclose(file);
 
 	/* Retire the previous resources under one grab. The server reparents and
@@ -3654,6 +3663,9 @@ resume_session(FILE *file, const RestartState *state)
 	close(state->display_fd);
 	checkotherwm();
 	setup(state);
+	if (timer.active)
+		timer.duration = isfinite(timer_duration) && timer_duration > 0 ? timer_duration
+		                 : fmax(1, shell_timer_remaining(&timer, time(NULL), shell_seconds()));
 	Monitor *mapping[MaxMonitors];
 	restore_monitors(state, mapping);
 
@@ -3796,11 +3808,13 @@ openpanel(Monitor *m, enum ShellAction action, float anchor, Time event_time)
 }
 
 static void
-timer_start(void)
+timer_start(enum ShellAction action, time_t value)
 {
 	if (timer.active)
 		return;
-	if (shell_timer_set(&timer, panel.at, panel.input, panel.message)) {
+	int started = action == ActTimerSet ? shell_timer_set(&timer, panel.at, panel.input, panel.message)
+	              : shell_timer_preset(&timer, action == ActTimerAtPreset, value, panel.message);
+	if (started) {
 		panel.input[0] = panel.message[0] = 0;
 		panel.cursor = 0;
 		drawbars();
@@ -3808,7 +3822,7 @@ timer_start(void)
 }
 
 static void
-panel_activate(enum ShellAction action, int value)
+panel_activate(enum ShellAction action, time_t value)
 {
 	switch (action) {
 	case ActPast: shell_calendar_shift(&panel, -1); break;
@@ -3831,7 +3845,9 @@ panel_activate(enum ShellAction action, int value)
 		panel.at = action == ActAt;
 		break;
 	case ActTimerInput: panel.cursor = strlen(panel.input); break;
-	case ActTimerSet: timer_start(); break;
+	case ActTimerSet:
+	case ActTimerInPreset:
+	case ActTimerAtPreset: timer_start(action, value); break;
 	case ActTimerCancel:
 		timer = (ShellTimer){0};
 		drawbars();
@@ -3855,7 +3871,7 @@ timer_key(KeySym key, int ch)
 	if (timer.active)
 		return;
 	switch (key) {
-	case XK_Return: case XK_KP_Enter: timer_start(); break;
+	case XK_Return: case XK_KP_Enter: panel_activate(ActTimerSet, 0); break;
 	case XK_Tab: case XK_ISO_Left_Tab:
 		panel_activate(panel.at ? ActIn : ActAt, 0);
 		break;
@@ -4030,8 +4046,11 @@ ui_tick(void)
 			drawbar(m);
 		panel_dirty |= panel.win && panel.kind != ActPalette;
 	}
-	if (timer.active && panel.win && panel.kind == ActClock && second != now)
-		panel_dirty = 1;
+	if (timer.active && second != now) {
+		if (settings.timerprogressheight)
+			drawbars();
+		panel_dirty |= panel.win && panel.kind == ActClock;
+	}
 	second = now;
 
 	int can_animate = tick >= frame;

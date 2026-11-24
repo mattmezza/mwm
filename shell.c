@@ -484,7 +484,7 @@ shell_hit(const ShellHit *hits, int count, int x, int y)
 }
 
 static void
-hit(Frame *f, cui_rect r, enum ShellAction action, int value)
+hit(Frame *f, cui_rect r, enum ShellAction action, time_t value)
 {
 	if (r.w > 0 && r.h > 0 && f->nhits < f->capacity)
 		f->hits[f->nhits++] = (ShellHit){r, action, value};
@@ -643,8 +643,6 @@ shell_bar_draw(const ShellHost *host, const ShellFont *font, unsigned revision,
 		strftime(date, sizeof date, "%a %d %b", &local);
 		strftime(clock, sizeof clock, "%H:%M", &local);
 	}
-	if (timer->active)
-		strncat(clock, " •", sizeof clock - strlen(clock) - 1);
 	int cw = textwidth(&f, clock, size, mono) + 39;
 	int dw = textwidth(&f, date, size, mono) + 39;
 	int clockw = cw + dw + 8;
@@ -664,11 +662,20 @@ shell_bar_draw(const ShellHost *host, const ShellFont *font, unsigned revision,
 		box(&f, 10, clockbox, radius, status_bg, outline, status_bg.a != 0, 1);
 		bar_clock(&f, (cui_rect){clockx+4, y+2, dw, height-4}, date, ActCalendar,
 		          11, status_bg, fg, accent, show_icons);
-		bar_clock(&f, (cui_rect){right-cw-4, y+2, cw, height-4}, clock, ActClock,
-		          15, status_bg, timer->active ? accent : fg, accent, show_icons);
+		cui_rect hour = {right-cw-4, y+2, cw, height-4};
+		bar_clock(&f, hour, clock, ActClock, 15, status_bg, fg, accent, show_icons);
 		if (dw > 20)
 			box(&f, 19, (cui_rect){clockx+dw+4, y+8, 1, height-16},
 			    0, outline, transparent, 0, 0);
+		if (timer->active && c->timerprogressheight && hour.w > 20) {
+			int thickness = c->timerprogressheight;
+			cui_rect rail = {hour.x+5, y+height-1-thickness, hour.w-10, thickness};
+			double remaining = shell_timer_remaining(timer, now, tick);
+			float elapsed = 1 - fmin(fmax(remaining / timer->duration, 0), 1);
+			box(&f, 30, rail, thickness/2.f, blend(status_bg, accent, 0.35f), transparent, 0, 0);
+			rail.w = MAX(thickness, roundf(rail.w * elapsed));
+			box(&f, 31, rail, thickness/2.f, accent, transparent, 0, 0);
+		}
 	}
 
 	/* Fit the active tag first, then lay visible occupied tags out in tag order. */
@@ -832,8 +839,10 @@ shell_panel_open(const ShellHost *host, const Config *config, ShellPanel *panel,
 	                          : by + bar_inset - separation + pad;
 	int available = kind == ActPalette ? y + h - py - 8
 	                : config->topbar ? y + h - py - 6 : py - y - 6;
-	int zone_rows = MAX(1, MIN(config->nzones + 1, (available - 246 - 2*pad)/40));
-	int height = kind == ActCalendar ? 364 : kind == ActPalette ? 420 : 246 + zone_rows*40;
+	int timer_presets = (config->nin_presets || config->at_presets) && available - 2*pad >= 326;
+	int clock_base = timer_presets ? 286 : 246;
+	int zone_rows = MAX(1, MIN(config->nzones + 1, (available - clock_base - 2*pad)/40));
+	int height = kind == ActCalendar ? 364 : kind == ActPalette ? 420 : clock_base + zone_rows*40;
 	height = MIN(height, available - 2*pad);
 	if (height < (kind == ActClock ? 280 : kind == ActCalendar ? 240 : 160))
 		return 0;
@@ -848,7 +857,8 @@ shell_panel_open(const ShellHost *host, const Config *config, ShellPanel *panel,
 	localtime_r(&now, &local);
 	*panel = (ShellPanel){.kind = kind, .monitor = monitor, .width = width,
 	                      .height = height, .pad = pad, .year = local.tm_year+1900, .month = local.tm_mon,
-	                      .zone_rows = zone_rows, .hover_x = -1, .hover_y = -1,
+	                      .zone_rows = zone_rows, .timer_presets = timer_presets,
+	                      .hover_x = -1, .hover_y = -1,
 	                      .opened = shell_seconds()};
 	XSetWindowAttributes attrs = {
 		.override_redirect = True, .background_pixel = 0, .border_pixel = 0, .colormap = host->cmap,
@@ -933,6 +943,55 @@ calendar(Frame *f, const ShellPanel *p, const struct tm *local, cui_color fg,
 }
 
 static void
+timer_presets(Frame *f, int at, cui_rect row, time_t now, const struct tm *local,
+              cui_color card, cui_color fg, cui_color outline)
+{
+	int count = at ? f->config->at_presets : f->config->nin_presets;
+	if (!count)
+		return;
+	const int gap = 6;
+	float size = MAX(9, f->size-1);
+	float minimum = textwidth(f, at ? "00:00" : "00h00m", size, mono) + 8;
+	count = MIN(count, (row.w + gap) / (minimum + gap));
+	if (!count)
+		return;
+	time_t candidate = now - local->tm_sec + 60;
+	int last_hour = -1;
+	for (int i = 0; i < count; ++i) {
+		time_t value;
+		char caption[16];
+		if (at) {
+			struct tm hour;
+			do {
+				if (difftime(candidate, now) > 12*3600 || !localtime_r(&candidate, &hour))
+					return;
+				value = candidate;
+				candidate += 60;
+			} while (hour.tm_min || hour.tm_hour == last_hour);
+			last_hour = hour.tm_hour;
+			strftime(caption, sizeof caption, "%H:%M", &hour);
+		} else {
+			int minutes = f->config->in_presets[i];
+			value = minutes * 60;
+			if (minutes < 60)
+				snprintf(caption, sizeof caption, "%dm", minutes);
+			else if (minutes % 60)
+				snprintf(caption, sizeof caption, "%dh%02dm", minutes/60, minutes%60);
+			else
+				snprintf(caption, sizeof caption, "%dh", minutes/60);
+		}
+		float start = roundf(i * (row.w + gap) / count);
+		float end = roundf((i+1) * (row.w + gap) / count);
+		cui_rect r = {row.x+start, row.y, end-start-gap, row.h};
+		int id = 380 + i*2;
+		cui_color bg = inside(r, f->hover_x, f->hover_y) ? blend(card, fg, 0.13f) : card;
+		box(f, id, r, f->config->panelradius, bg, outline, 1, 0);
+		label(f, id+1, (cui_rect){r.x+4, r.y, r.w-8, r.h}, caption, fg, size, mono, CUI_ALIGN_CENTER);
+		hit(f, r, at ? ActTimerAtPreset : ActTimerInPreset, value);
+	}
+}
+
+static void
 world_clock(Frame *f, const ShellPanel *p, const ShellTimer *timer, const struct tm *local,
             time_t now, double tick, cui_color fg, cui_color muted, cui_color accent,
             cui_color ink, cui_color card, cui_color outline)
@@ -971,7 +1030,7 @@ world_clock(Frame *f, const ShellPanel *p, const ShellTimer *timer, const struct
 		label(f, 153+row*4, (cui_rect){x+w-27-time_width, yy, time_width, 36}, time, i ? fg : accent,
 		      f->size, mono, CUI_ALIGN_END);
 	}
-	float title = h-177;
+	float title = h - (p->timer_presets ? 217 : 177);
 	box(f, 300, (cui_rect){x+17, y+title-8, w-34, 1}, 0, outline, transparent, 0, 0);
 	label(f, 301, (cui_rect){x+17, y+title, w-34, 28}, "Timer", fg, f->size+3, medium, CUI_ALIGN_START);
 	if (timer->active) {
@@ -979,8 +1038,9 @@ world_clock(Frame *f, const ShellPanel *p, const ShellTimer *timer, const struct
 		char remaining[48];
 		snprintf(remaining, sizeof remaining, "%02d:%02d:%02d remaining",
 		         seconds/3600, seconds/60%60, seconds%60);
-		box(f, 310, (cui_rect){x+17, y+title+41, w-34, 51}, radius, card, outline, 1, 0);
-		label(f, 311, (cui_rect){x+27, y+title+41, w-54, 51}, remaining, accent,
+		int countdown_height = p->timer_presets ? 80 : 51;
+		box(f, 310, (cui_rect){x+17, y+title+41, w-34, countdown_height}, radius, card, outline, 1, 0);
+		label(f, 311, (cui_rect){x+27, y+title+41, w-54, countdown_height}, remaining, accent,
 		      f->size+3, mono, CUI_ALIGN_CENTER);
 		button(f, 320, (cui_rect){x+w-109, y+h-52, 92, 35}, "Cancel", ActTimerCancel, card, fg, 0);
 		return;
@@ -1003,6 +1063,9 @@ world_clock(Frame *f, const ShellPanel *p, const ShellTimer *timer, const struct
 		    0, accent, transparent, 0, 0);
 	hit(f, input, ActTimerInput, 0);
 	button(f, 360, (cui_rect){x+w-105, input.y, 88, input.h}, "Set", ActTimerSet, accent, ink, 0);
+	if (p->timer_presets)
+		timer_presets(f, p->at, (cui_rect){x+17, y+title+130, w-34, 34},
+		              now, local, card, fg, outline);
 	label(f, 370, (cui_rect){x+17, y+h-47, w-34, 30},
 	      p->message[0] ? p->message : p->at ? "24-hour local time" : "Press Enter to start",
 	      p->message[0] ? f->config->palette[SchemeUrg][ColBg] : muted, small,
@@ -1114,7 +1177,6 @@ shell_timer_set(ShellTimer *timer, int at, const char *input, char error[96])
 {
 	int p[3] = {0};
 	int n = parse_time(input, p, at ? 2 : 3);
-	double now = shell_seconds();
 	const char *message = at ? "Use a local time such as 16:30." : "Use minutes or HH:MM:SS, up to 24 hours.";
 	if (at && n == 2 && p[0] < 24 && p[1] < 60) {
 		time_t current = time(NULL);
@@ -1132,19 +1194,29 @@ shell_timer_set(ShellTimer *timer, int at, const char *input, char error[96])
 			message = "This local time does not occur on the due date.";
 			goto invalid;
 		}
-		*timer = (ShellTimer){.active = 1, .at = 1, .wall = wall};
-		return 1;
+		return shell_timer_preset(timer, 1, wall, error);
 	}
 	if (!at && n >= 1) {
 		int seconds = n == 1 ? 60*p[0] : p[0]*3600 + p[1]*60 + p[2];
-		if (seconds > 0 && seconds <= 86400 && p[1] < 60 && p[2] < 60) {
-			*timer = (ShellTimer){.active = 1, .due = now + seconds};
-			return 1;
-		}
+		if (seconds > 0 && seconds <= 86400 && p[1] < 60 && p[2] < 60)
+			return shell_timer_preset(timer, 0, seconds, error);
 	}
 invalid:
 	snprintf(error, 96, "%s", message);
 	return 0;
+}
+
+int
+shell_timer_preset(ShellTimer *timer, int at, time_t value, char error[96])
+{
+	double duration = at ? difftime(value, time(NULL)) : value;
+	if (duration <= 0) {
+		snprintf(error, 96, "That time has passed. Choose an upcoming time.");
+		return 0;
+	}
+	*timer = (ShellTimer){.active = 1, .at = at, .duration = duration,
+	                      .wall = at ? value : 0, .due = at ? 0 : shell_seconds() + duration};
+	return 1;
 }
 
 double

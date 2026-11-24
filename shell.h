@@ -31,13 +31,13 @@ typedef struct {
 enum ShellAction {
 	ActNone, ActTag, ActLayout, ActCalendar, ActClock, ActPalette,
 	ActPast, ActToday, ActFuture, ActAt, ActIn, ActTimerInput, ActTimerSet,
-	ActTimerCancel, ActZonePrevious, ActZoneNext, ActChoose
+	ActTimerCancel, ActTimerInPreset, ActTimerAtPreset, ActZonePrevious, ActZoneNext, ActChoose
 };
 
 typedef struct {
 	cui_rect rect;
 	enum ShellAction action;
-	int value;
+	time_t value;
 } ShellHit;
 
 typedef struct {
@@ -78,7 +78,7 @@ typedef struct {
 	Window win;
 	enum ShellAction kind;
 	int monitor, width, height, pad, year, month;
-	int zone_start, zone_rows, at, selected, cursor;
+	int zone_start, zone_rows, timer_presets, at, selected, cursor;
 	int hover_x, hover_y;
 	ShellHit hits[24];
 	int nhits;
@@ -90,6 +90,7 @@ typedef struct {
 	int active, at;
 	double due;
 	time_t wall;
+	double duration;
 } ShellTimer;
 
 int shell_font(ShellFont *, const Config *, char error[CONFIG_ERROR]);
@@ -113,6 +114,7 @@ int shell_panel_draw(const ShellHost *, const ShellFont *, unsigned revision,
                      const ShellEntry *, int count, time_t now, double tick);
 void shell_calendar_shift(ShellPanel *, int months);
 int shell_timer_set(ShellTimer *, int at, const char *input, char error[96]);
+int shell_timer_preset(ShellTimer *, int at, time_t value, char error[96]);
 double shell_timer_remaining(const ShellTimer *, time_t now, double tick);
 void shell_timer_notify(const Config *, int xfd);
 unsigned long shell_rgb(cui_color);
