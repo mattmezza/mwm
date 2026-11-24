@@ -3,6 +3,7 @@
 
 #include "mwm_config.h"
 #include "controls.h"
+#include "activity.h"
 #include "cui/cui_chart.h"
 #include "cui/cui_software.h"
 #include "cui/cui_slider_events.h"
@@ -36,7 +37,8 @@ enum ShellAction {
 	ActNone, ActTag, ActLayout, ActCalendar, ActClock, ActPalette,
 	ActPast, ActToday, ActFuture, ActAt, ActIn, ActTimerInput, ActTimerSet,
 	ActTimerCancel, ActTimerInPreset, ActTimerAtPreset, ActZonePrevious, ActZoneNext, ActChoose,
-	ActBattery, ActVolume, ActBrightness
+	ActBattery, ActVolume, ActBrightness, ActMonthGrid, ActYearGrid, ActCalendarMonth,
+	ActCalendarYear, ActCalendarDay, ActTimerToggle, ActPresetPrevious, ActPresetNext, ActCopyTime, ActTimerFoldOpen
 };
 
 typedef struct {
@@ -50,7 +52,8 @@ typedef struct {
 	int shown;
 } ShellReveal;
 
-enum { MetricNone = -1, UsageCpu, UsageRam, UsageCount, MetricLoad = UsageCount,
+enum { MetricNone = -1, UsageCpu, UsageGpu, UsageRam, UsageCount, MetricLoad = UsageCount,
+       MetricNetwork, MetricDisk,
        MetricControl, MetricCount = MetricControl + ControlCount };
 enum { USAGE_CHART_HEIGHT = 22, LoadPeriods = 3 };
 
@@ -62,6 +65,7 @@ typedef struct {
 
 typedef struct {
 	ShellUsage usage[UsageCount];
+	Activity activity;
 	double load[LoadPeriods];
 	long cpus;
 	int load_valid, interval;
@@ -119,15 +123,19 @@ typedef struct {
 } ShellEntry;
 
 enum { EntryWindow, EntryTag, EntryLayout };
+enum { CalendarDays, CalendarMonths, CalendarYears, CalendarYearPage = 12 };
 
 typedef struct {
 	ShellSurface surface;
 	Window win;
 	enum ShellAction kind;
 	int monitor, width, height, pad, year, month;
-	int zone_start, zone_rows, timer_presets, at, selected, cursor;
+	int calendar_view, browse_year;
+	int zone_start, zone_rows, timer_open, at, selected, cursor;
+	int clock_limit, window_x, clock_anchor, preset_start, preset_more;
+	cui_rect preset_area;
 	int hover_x, hover_y;
-	ShellHit hits[24];
+	ShellHit hits[52];
 	int nhits;
 	char input[128], message[96];
 	double opened;
@@ -171,6 +179,7 @@ int shell_panel_draw(const ShellHost *, const ShellFont *, unsigned revision,
 int shell_panel_control(enum ShellAction);
 void shell_panel_pointer(ShellPanel *, cui_event_type, int x, int y);
 void shell_calendar_shift(ShellPanel *, int months);
+void shell_clock_resize(const ShellHost *, const Config *, ShellPanel *, int open, int active);
 int shell_timer_set(ShellTimer *, int at, const char *input, char error[96]);
 int shell_timer_preset(ShellTimer *, int at, time_t value, char error[96]);
 double shell_timer_remaining(const ShellTimer *, time_t now, double tick);

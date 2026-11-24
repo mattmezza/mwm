@@ -42,6 +42,46 @@ number(const char *device, const char *key)
 	return !*text || *end || value < 0 || value > INT_MAX ? -1 : (int)value;
 }
 
+static double
+battery_value(const char *device, const char *key)
+{
+	char text[48], *end;
+	if (!attribute(device, key, text, sizeof text))
+		return NAN;
+	double value = strtod(text, &end);
+	return end != text && !*end && isfinite(value) ? value : NAN;
+}
+
+static int
+battery_time(const char *device, int charging, int limit)
+{
+	int capped = charging && limit > 0 && limit < 100;
+	if (!capped) {
+		int estimate = number(device, charging ? "time_to_full_avg" : "time_to_empty_avg");
+		if (estimate <= 0)
+			estimate = number(device, charging ? "time_to_full_now" : "time_to_empty_now");
+		if (estimate > 0)
+			return estimate;
+	}
+	static const char *attributes[][4] = {
+		{"energy_now", "energy_full", "energy_empty", "power_now"},
+		{"charge_now", "charge_full", "charge_empty", "current_now"},
+	};
+	for (int i = 0; i < 2; ++i) {
+		double now = battery_value(device, attributes[i][0]);
+		double bound = battery_value(device, attributes[i][charging ? 1 : 2]);
+		if (!charging && !isfinite(bound))
+			bound = 0;
+		if (capped)
+			bound *= limit / 100.0;
+		double rate = fabs(battery_value(device, attributes[i][3]));
+		double seconds = 3600 * (charging ? bound - now : now - bound) / rate;
+		if (isfinite(seconds) && seconds >= 0 && seconds <= INT_MAX && now >= 0 && bound >= 0)
+			return ceil(seconds);
+	}
+	return -1;
+}
+
 static int
 find_device(const char *base, const char *preferred, const char *probe, char device[384])
 {
@@ -113,7 +153,7 @@ run(char *const argv[], char *output, size_t size)
 static ControlReading
 read_battery(const Config *config, int request)
 {
-	ControlReading data = {.limit = -1};
+	ControlReading data = {.limit = -1, .battery_seconds = -1};
 	char device[384], path[456];
 	if (!find_device("/sys/class/power_supply", config->battery_device, "capacity", device))
 		return data;
@@ -139,6 +179,8 @@ read_battery(const Config *config, int request)
 	}
 	attribute(device, "status", data.detail, sizeof data.detail);
 	data.charging = !strcmp(data.detail, "Charging");
+	if (data.charging || !strcmp(data.detail, "Discharging"))
+		data.battery_seconds = battery_time(device, data.charging, data.limit);
 	return data;
 }
 

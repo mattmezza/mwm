@@ -10,7 +10,7 @@ CUI_READY = $(CUI_BUILD)/.mwm-built
 CUI_LIBS = $(CUI_BUILD)/libcui_software.a $(CUI_BUILD)/libcui_text.a \
            $(CUI_BUILD)/libcui_bidi.a $(CUI_BUILD)/libcui.a
 
-SRC = mwm.c mwm_config.c shell.c controls.c util.c
+SRC = mwm.c mwm_config.c shell.c controls.c activity.c util.c
 OBJ = $(SRC:.c=.o)
 
 all: mwm mwmc
@@ -18,7 +18,7 @@ all: mwm mwmc
 .c.o:
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $<
 
-mwm.o shell.o mwm_config.o controls.o: $(CUI_READY) shell.h controls.h mwm_config.h
+mwm.o shell.o mwm_config.o controls.o activity.o: $(CUI_READY) shell.h controls.h activity.h mwm_config.h
 shell.o: font_assets.h
 mwm.o mwmc.o util.o: util.h config.mk
 mwm.o mwmc.o: ipc.h

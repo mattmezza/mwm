@@ -8,7 +8,7 @@ enum Control { ControlBattery, ControlVolume, ControlBrightness, ControlCount };
 
 typedef struct {
 	int available, adjustable, level, minimum, limit, charging, muted, failed;
-	int brightness_restore;
+	int brightness_restore, battery_seconds;
 	char detail[32];
 } ControlReading;
 

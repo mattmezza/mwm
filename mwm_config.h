@@ -5,13 +5,13 @@
 #include <X11/Xlib.h>
 #include <time.h>
 
-enum { MAX_TAGS = 100, MAX_RULES = 64, MAX_ZONES = 8, MAX_TIMER_PRESETS = 5, CONFIG_ERROR = 768 };
+enum { MAX_TAGS = 100, MAX_RULES = 64, MAX_ZONES = 8, MAX_TIMER_PRESETS = 24, CONFIG_ERROR = 768 };
 enum { MAX_USAGE_SAMPLES = 120, MAX_USAGE_WIDTH = 200 };
 enum { SYSTEM_INTERVAL_MIN = 125, SYSTEM_INTERVAL_MAX = 5000 };
 enum { UsageWarning, UsageDanger, UsageColorCount };
 enum { SchemeNorm, SchemeSel, SchemeUrg, SchemeTitle, SchemeStatus, SchemeBar, SchemeLast };
 enum { ColFg, ColBg, ColBorder };
-enum BarItem { BarTags, BarLayout, BarTitle, BarStatus, BarCpu, BarRam, BarLoad, BarDate, BarTime,
+enum BarItem { BarTags, BarLayout, BarTitle, BarStatus, BarCpu, BarGpu, BarRam, BarLoad, BarNetwork, BarDisk, BarDate, BarTime,
                BarTray, BarBattery, BarVolume, BarBrightness, BarItemCount };
 enum { MAX_BAR_SEGMENTS = BarItemCount, SEGMENT_NAME = 32 };
 enum BarAlign { BarLeft, BarCenter, BarRight, BarAlignCount };
@@ -40,9 +40,10 @@ typedef struct {
 	int barseggap, segradius, tagradius, titlealign, barfontsize, separators;
 	BarPlacement segments[MAX_BAR_SEGMENTS];
 	int nsegments, custom_segments;
-	int timerprogressheight;
-	int cpu_interval, cpu_history, cpu_width, ram_history, ram_width;
-	int load_width, tooltip_delay;
+	int timer_indicator;
+	int cpu_interval, cpu_history, cpu_width, gpu_history, gpu_width, ram_history, ram_width;
+	int load_width, network_width, disk_width, tooltip_delay;
+	char gpu_device[64], network_interface[64], disk_device[64];
 	int controls_interval, battery_low, battery_critical, battery_step, volume_step, brightness_step;
 	int brightness_min, controls_width;
 	char battery_device[64], backlight_device[64], audio_sink[64];

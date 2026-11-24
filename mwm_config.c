@@ -36,10 +36,11 @@ config_defaults(Config *c)
 		.defaultlayout = 1, .nmaster = 1, .mfact = 0.5f,
 		.topbar = 1, .showbar = 1, .barvertpad = 6, .barpadx = 12,
 		.barmargin = 6, .barvmargin = 6, .barseggap = 10, .segradius = 6, .tagradius = 3, .barfontsize = 16,
-		.timerprogressheight = 2,
+		.timer_indicator = 1,
 		.cpu_interval = 500, .cpu_history = 40, .cpu_width = 36,
+		.gpu_history = 40, .gpu_width = 36,
 		.ram_history = 40, .ram_width = 36,
-		.load_width = 26, .tooltip_delay = 350,
+		.load_width = 26, .network_width = 32, .disk_width = 30, .tooltip_delay = 350,
 		.controls_interval = 1000, .battery_low = 25, .battery_critical = 10,
 		.battery_step = 5, .volume_step = 5, .brightness_step = 5, .brightness_min = 1,
 		.controls_width = 270, .audio_sink = "@DEFAULT_AUDIO_SINK@",
@@ -58,7 +59,8 @@ config_defaults(Config *c)
 		.alpha = {255, 255, 255, 255, 255, 0},
 		.usage_colors = {[UsageWarning] = "#e0af68", [UsageDanger] = "#ff5266"},
 		.ntags = COUNT(tags), .nrules = COUNT(rules),
-		.in_presets = {10, 20, 30, 60, 90}, .nin_presets = 5, .at_presets = 5,
+		.in_presets = {5, 10, 15, 20, 30, 45, 60, 90, 120, 150, 180, 240, 360, 480, 720},
+		.nin_presets = 15, .at_presets = 12,
 	};
 	for (int i = 0; i < MAX_TAGS; ++i) {
 		if (i < c->ntags)
@@ -94,13 +96,21 @@ static const Setting settings[] = {
 	INT("bar", "tagradius", tagradius, 0, 32),
 	INT("bar", "barfontsize", barfontsize, 0, 28),
 	INT("bar", "separators", separators, 0, 1),
-	INT("bar", "timerprogressheight", timerprogressheight, 0, 5),
+	INT("bar", "timer_indicator", timer_indicator, 0, 1),
+	INT("bar", "timerprogressheight", timer_indicator, 0, 5),
 	INT("system", "cpu_interval", cpu_interval, 100, 60000),
 	INT("system", "cpu_history", cpu_history, 2, MAX_USAGE_SAMPLES),
 	INT("system", "cpu_width", cpu_width, 16, MAX_USAGE_WIDTH),
+	INT("system", "gpu_history", gpu_history, 2, MAX_USAGE_SAMPLES),
+	INT("system", "gpu_width", gpu_width, 16, MAX_USAGE_WIDTH),
 	INT("system", "ram_history", ram_history, 2, MAX_USAGE_SAMPLES),
 	INT("system", "ram_width", ram_width, 16, MAX_USAGE_WIDTH),
 	INT("system", "load_width", load_width, 18, 80),
+	INT("system", "network_width", network_width, 16, 80),
+	INT("system", "disk_width", disk_width, 16, 80),
+	STR("system", "gpu_device", gpu_device),
+	STR("system", "network_interface", network_interface),
+	STR("system", "disk_device", disk_device),
 	INT("system", "tooltip_delay", tooltip_delay, -1, 2000),
 	INT("controls", "interval", controls_interval, 250, 60000),
 	INT("controls", "battery_low", battery_low, 0, 100),
@@ -301,13 +311,14 @@ read_presets(Config *c, const char *value)
 
 static const char *item_names[BarItemCount] = {
 	[BarTags] = "spaces", [BarLayout] = "layout", [BarTitle] = "title", [BarStatus] = "status",
-	[BarCpu] = "cpu", [BarRam] = "ram", [BarLoad] = "load", [BarDate] = "date", [BarTime] = "time",
+	[BarCpu] = "cpu", [BarGpu] = "gpu", [BarRam] = "ram", [BarLoad] = "load",
+	[BarNetwork] = "network", [BarDisk] = "disk", [BarDate] = "date", [BarTime] = "time",
 	[BarTray] = "tray", [BarBattery] = "battery", [BarVolume] = "volume", [BarBrightness] = "brightness",
 };
 
 static const BarPlacement builtins[] = {
 	{.name = "tags", .items = {BarTags, BarLayout}, .count = 2},
-	{.name = "system", .items = {BarCpu, BarRam, BarLoad}, .count = 3},
+	{.name = "system", .items = {BarCpu, BarGpu, BarRam, BarLoad, BarNetwork, BarDisk}, .count = 6},
 	{.name = "datetime", .items = {BarDate, BarTime}, .count = 2},
 	{.name = "power", .items = {BarBattery, BarVolume, BarBrightness}, .count = 3},
 };

@@ -114,7 +114,7 @@ typedef struct Systray {
 	unsigned long bg;
 } Systray;
 
-enum { MaxMonitors = 64 };
+enum { MaxMonitors = 64, RestartLegacySegments = 13 };
 
 /* Private handoff format shared by binaries that implement restart v1. */
 #define RESTART_CHECK "--check-restart-v1"
@@ -160,6 +160,7 @@ static void attachafter(Client *c, Client *after);
 static void attachstack(Client *c);
 static void buttonpress(XEvent *e);
 static void copytitle(const Client *c, Time when);
+static void copydate(int datetime, int date, Time when);
 static void checkotherwm(void);
 static void cleanup(void);
 static void clearround(Window w);
@@ -1780,6 +1781,10 @@ bar_adjust(const Monitor *m, ShellHit hit, int x, int y, unsigned button, Time w
 		copytitle(m->sel, when);
 		return 1;
 	}
+	if (button == Button3 && (hit.action == ActCalendar || hit.action == ActClock)) {
+		copydate(hit.action == ActClock, 0, when);
+		return 1;
+	}
 	if (button == Button3 && (control == ControlVolume || control == ControlBrightness)) {
 		controls_toggle(&controls, control);
 		return 1;
@@ -1791,7 +1796,7 @@ bar_adjust(const Monitor *m, ShellHit hit, int x, int y, unsigned button, Time w
 		return 1;
 	}
 	int metric = shell_bar_metric(&m->bar, x, y);
-	if (metric >= UsageCpu && metric <= MetricLoad) {
+	if (metric >= UsageCpu && metric <= MetricDisk) {
 		adjust_system_interval(button == Button4);
 		return 1;
 	}
@@ -3015,6 +3020,43 @@ gettextprop(Window w, Atom atom, char *text, unsigned int size)
 }
 
 static void
+copy_clipboard(char *copy, Time when)
+{
+	XSetSelectionOwner(dpy, clipboard, wmcheckwin, when);
+	if (XGetSelectionOwner(dpy, clipboard) != wmcheckwin) {
+		free(copy);
+		return;
+	}
+	free(clipboard_title);
+	clipboard_title = copy;
+	clipboard_time = when;
+}
+
+static void
+copydate(int datetime, int date, Time when)
+{
+	char text[40];
+	if (date) {
+		snprintf(text, sizeof text, "%04d-%02d-%02d", date/10000, date/100%100, date%100);
+	} else {
+		time_t now = time(NULL);
+		struct tm local;
+		if (!localtime_r(&now, &local) || !strftime(text, sizeof text,
+		    datetime ? "%Y-%m-%dT%H:%M:%S" : "%Y-%m-%d", &local))
+			return;
+		if (datetime) {
+			char zone[16];
+			if (strftime(zone, sizeof zone, "%z", &local) != 5)
+				return;
+			snprintf(text+strlen(text), sizeof text-strlen(text), "%.3s:%s", zone, zone+3);
+		}
+	}
+	char *copy = ecalloc(strlen(text)+1, 1);
+	strcpy(copy, text);
+	copy_clipboard(copy, when);
+}
+
+static void
 copytitle(const Client *c, Time when)
 {
 	Atom names[] = {netatom[NetWMName], XA_WM_NAME};
@@ -3034,16 +3076,8 @@ copytitle(const Client *c, Time when)
 		free(copy);
 		copy = NULL;
 	}
-	if (!copy)
-		return;
-	XSetSelectionOwner(dpy, clipboard, wmcheckwin, when);
-	if (XGetSelectionOwner(dpy, clipboard) != wmcheckwin) {
-		free(copy);
-		return;
-	}
-	free(clipboard_title);
-	clipboard_title = copy;
-	clipboard_time = when;
+	if (copy)
+		copy_clipboard(copy, when);
 }
 
 static void
@@ -3465,6 +3499,9 @@ applystyle(const Config *next)
 		system_stats.interval = next->cpu_interval;
 		system_next = 0;
 	}
+	if (strcmp(settings.gpu_device, next->gpu_device) || strcmp(settings.disk_device, next->disk_device) ||
+	    strcmp(settings.network_interface, next->network_interface))
+		system_next = 0;
 	settings = *next;
 	++theme_revision;
 	lrpad = 2 * MAX(5, settings.barpadx);
@@ -3788,10 +3825,11 @@ save_session(FILE *file, Window requestor)
 	if (fwrite(&timer.duration, sizeof timer.duration, 1, file) != 1)
 		return 0;
 	char hidden[MAX_BAR_SEGMENTS][SEGMENT_NAME] = {{0}};
+	int nhidden = 0;
 	for (int i = 0; i < settings.nsegments; ++i)
 		if (hidden_segments & (1u << i))
-			strcpy(hidden[i], settings.segments[i].name);
-	if (fwrite(hidden, sizeof hidden, 1, file) != 1)
+			strcpy(hidden[nhidden++], settings.segments[i].name);
+	if (fwrite(hidden, sizeof hidden[0], RestartLegacySegments, file) != RestartLegacySegments)
 		return 0;
 	RestartBarControls bar_controls = {
 		.interval = system_stats.interval, .configured_interval = settings.cpu_interval,
@@ -3804,6 +3842,9 @@ save_session(FILE *file, Window requestor)
 	}
 	if (fwrite(&bar_controls, sizeof bar_controls, 1, file) != 1 ||
 	    (bar_controls.title_bytes && fwrite(clipboard_title, bar_controls.title_bytes, 1, file) != 1))
+		return 0;
+	if (fwrite(hidden + RestartLegacySegments, sizeof hidden[0], MAX_BAR_SEGMENTS-RestartLegacySegments, file)
+	    != MAX_BAR_SEGMENTS-RestartLegacySegments)
 		return 0;
 	return fflush(file) == 0 && fseek(file, 0, SEEK_SET) == 0;
 }
@@ -3971,8 +4012,9 @@ resume_session(FILE *file, const RestartState *state)
 	if (ferror(file) || (bytes && bytes != sizeof timer_duration))
 		die("mwm: incomplete timer state");
 	char hidden[MAX_BAR_SEGMENTS][SEGMENT_NAME] = {{0}};
-	bytes = fread(hidden, 1, sizeof hidden, file);
-	if (ferror(file) || (bytes && bytes != sizeof hidden))
+	size_t legacy_size = RestartLegacySegments * sizeof hidden[0];
+	bytes = fread(hidden, 1, legacy_size, file);
+	if (ferror(file) || (bytes && bytes != legacy_size))
 		die("mwm: incomplete segment state");
 	RestartBarControls bar_controls = {0};
 	bytes = fread(&bar_controls, 1, sizeof bar_controls, file);
@@ -3984,6 +4026,10 @@ resume_session(FILE *file, const RestartState *state)
 		if (fread(title, bar_controls.title_bytes, 1, file) != 1 || title[bar_controls.title_bytes-1])
 			die("mwm: incomplete clipboard state");
 	}
+	size_t extra_size = sizeof hidden - legacy_size;
+	bytes = fread(hidden + RestartLegacySegments, 1, extra_size, file);
+	if (ferror(file) || (bytes && bytes != extra_size))
+		die("mwm: incomplete additional segment state");
 	fclose(file);
 
 	/* Retire the previous resources under one grab. The server reparents and
@@ -4170,7 +4216,21 @@ timer_start(enum ShellAction action, time_t value)
 	if (started) {
 		panel.input[0] = panel.message[0] = 0;
 		panel.cursor = 0;
+		shell_clock_resize(&shell, &settings, &panel, 0, 1);
 		drawbars();
+	}
+}
+
+static void
+calendar_page(int direction)
+{
+	if (panel.calendar_view == CalendarDays) {
+		shell_calendar_shift(&panel, direction);
+	} else if (panel.calendar_view == CalendarMonths) {
+		panel.browse_year = MAX(1900, MIN(9999, panel.browse_year + direction));
+	} else {
+		int last = 1900 + (9999-1900)/CalendarYearPage*CalendarYearPage;
+		panel.browse_year = MAX(1900, MIN(last, panel.browse_year + direction*CalendarYearPage));
 	}
 }
 
@@ -4178,8 +4238,8 @@ static void
 panel_activate(enum ShellAction action, time_t value)
 {
 	switch (action) {
-	case ActPast: shell_calendar_shift(&panel, -1); break;
-	case ActFuture: shell_calendar_shift(&panel, 1); break;
+	case ActPast: calendar_page(-1); break;
+	case ActFuture: calendar_page(1); break;
 	case ActToday: {
 		time_t now = time(NULL);
 		struct tm local;
@@ -4187,13 +4247,46 @@ panel_activate(enum ShellAction action, time_t value)
 			panel.month = local.tm_mon;
 			panel.year = local.tm_year + 1900;
 		}
+		panel.calendar_view = CalendarDays;
 		break;
 	}
+	case ActMonthGrid:
+		panel.browse_year = panel.year;
+		panel.calendar_view = CalendarMonths;
+		break;
+	case ActYearGrid:
+		if (panel.calendar_view == CalendarYears) {
+			panel.calendar_view = CalendarDays;
+		} else {
+			int year = panel.calendar_view == CalendarMonths ? panel.browse_year : panel.year;
+			panel.browse_year = 1900 + (year-1900)/CalendarYearPage*CalendarYearPage;
+			panel.calendar_view = CalendarYears;
+		}
+		break;
+	case ActCalendarMonth:
+		panel.year = panel.browse_year;
+		panel.month = value;
+		panel.calendar_view = CalendarDays;
+		break;
+	case ActCalendarYear:
+		panel.year = value;
+		panel.calendar_view = CalendarDays;
+		break;
+	case ActTimerToggle:
+		shell_clock_resize(&shell, &settings, &panel, !panel.timer_open, timer.active);
+		break;
+	case ActPresetPrevious:
+		panel.preset_start = MAX(0, panel.preset_start-1);
+		break;
+	case ActPresetNext:
+		panel.preset_start += panel.preset_more;
+		break;
 	case ActAt:
 	case ActIn:
 		if (panel.at != (action == ActAt)) {
 			panel.input[0] = panel.message[0] = 0;
 			panel.cursor = 0;
+			panel.preset_start = 0;
 		}
 		panel.at = action == ActAt;
 		break;
@@ -4203,6 +4296,7 @@ panel_activate(enum ShellAction action, time_t value)
 	case ActTimerAtPreset: timer_start(action, value); break;
 	case ActTimerCancel:
 		timer = (ShellTimer){0};
+		shell_clock_resize(&shell, &settings, &panel, 0, 0);
 		drawbars();
 		break;
 	case ActZonePrevious:
@@ -4286,6 +4380,11 @@ panel_key(XKeyEvent *event)
 	int raw = XLookupString(event, latin1, sizeof latin1, &key, NULL);
 	size_t n = latin1_utf8(bytes, sizeof bytes, latin1, raw > 0 ? raw : 0);
 	if (key == XK_Escape) {
+		if (panel.kind == ActCalendar && panel.calendar_view != CalendarDays) {
+			panel.calendar_view = CalendarDays;
+			panel_dirty = 1;
+			return;
+		}
 		shell_panel_close(&shell, &panel);
 		return;
 	}
@@ -4314,7 +4413,9 @@ panel_key(XKeyEvent *event)
 		return;
 	}
 	if (panel.kind == ActClock) {
-		if (!(event->state & ControlMask))
+		if (!panel.timer_open && (key == XK_Return || key == XK_KP_Enter))
+			panel_activate(ActTimerToggle, 0);
+		else if (panel.timer_open && !(event->state & ControlMask))
 			timer_key(key, raw == 1 ? (unsigned char)latin1[0] : 0);
 		return;
 	}
@@ -4403,6 +4504,18 @@ panel_event(XEvent *e)
 		controls_toggle(&controls, control);
 		return;
 	}
+	if (click->button == Button3) {
+		ShellHit hit = shell_hit(panel.hits, panel.nhits, click->x, click->y);
+		if (hit.action == ActCalendarDay || hit.action == ActToday || hit.action == ActCopyTime)
+			copydate(hit.action == ActCopyTime, hit.action == ActCalendarDay ? hit.value : 0, click->time);
+		return;
+	}
+	cui_rect row = panel.preset_area;
+	if (panel.kind == ActClock && click->button >= Button4 && click->button <= 7 &&
+	    click->x >= row.x && click->x < row.x+row.w && click->y >= row.y && click->y < row.y+row.h) {
+		panel_activate(click->button == Button4 || click->button == 6 ? ActPresetPrevious : ActPresetNext, 0);
+		return;
+	}
 	if (click->button == Button4 || click->button == Button5) {
 		if (control >= 0)
 			adjust_control(control, click->button == Button4 ? 1 : -1);
@@ -4489,16 +4602,22 @@ sample_ram(void)
 }
 
 static void
-sample_system(double tick)
+sample_system(double tick, unsigned items)
 {
 	int reset = !system_next;
 	system_next = tick + system_stats.interval / 1000.0;
-	double values[] = {[UsageCpu] = sample_cpu(reset), [UsageRam] = sample_ram()};
+	if (reset)
+		system_stats.activity = (Activity){0};
+	double values[] = {
+		[UsageCpu] = sample_cpu(reset), [UsageRam] = sample_ram(),
+		[UsageGpu] = activity_sample(&system_stats.activity, &settings, items, tick),
+	};
 	double load[LoadPeriods];
 	long cpus = sysconf(_SC_NPROCESSORS_ONLN);
 	int valid = cpus > 0 && getloadavg(load, LoadPeriods) == LoadPeriods;
 	int changed = valid != system_stats.load_valid ||
 	              (valid && (cpus != system_stats.cpus || memcmp(load, system_stats.load, sizeof load)));
+	changed |= (items & ((1u << BarNetwork) | (1u << BarDisk))) != 0;
 	system_stats.load_valid = valid;
 	system_stats.cpus = cpus;
 	if (valid)
@@ -4585,6 +4704,8 @@ ui_tick(void)
 	}
 	if (timer.active && shell_timer_remaining(&timer, now, tick) <= 0) {
 		timer.active = 0;
+		if (panel.win && panel.kind == ActClock)
+			shell_clock_resize(&shell, &settings, &panel, 0, 0);
 		shell_timer_notify(&settings, ConnectionNumber(dpy));
 		drawbars();
 		panel_dirty = panel.win != None;
@@ -4596,16 +4717,17 @@ ui_tick(void)
 		panel_dirty |= panel.win && panel.kind != ActPalette;
 	}
 	if (timer.active && second != now) {
-		if (settings.timerprogressheight)
+		if (settings.timer_indicator)
 			drawbars();
 		panel_dirty |= panel.win && panel.kind == ActClock;
 	}
 	second = now;
 	unsigned items = active_bar_items();
-	if (!(items & ((1u << BarCpu) | (1u << BarRam) | (1u << BarLoad))))
+	unsigned system_items = (1u << (BarDisk+1)) - (1u << BarCpu);
+	if (!(items & system_items))
 		system_next = 0;
 	else if (tick >= system_next)
-		sample_system(tick);
+		sample_system(tick, items);
 
 	int can_animate = tick >= frame;
 	if (can_animate)

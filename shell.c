@@ -448,13 +448,17 @@ label(Frame *f, int id, cui_rect r, const char *s, cui_color color, float size,
 	cui_end_box(f->ui);
 }
 
-static const char *icons[ActChoose + 1] = {
+static const char *icons[ActTimerFoldOpen + 1] = {
 	/* Outline glyphs drawn on the same 24px grid as Heroicons. */
 	[ActCalendar] = "<rect x='3' y='5' width='18' height='16' rx='3'/><path d='M7 3v4m10-4v4M3 10h18m-14 5h2m3 0h2m3 0h1m-11 3h2m3 0h2'/>",
 	[ActClock] = "<circle cx='12' cy='12' r='9'/><path d='M12 7v5l3 2'/>",
 	[ActPalette] = "<circle cx='10.5' cy='10.5' r='5.5'/><path d='m15 15 5 5'/>",
 	[ActPast] = "<path d='m14.5 6-6 6 6 6'/>",
 	[ActFuture] = "<path d='m9.5 6 6 6-6 6'/>",
+	[ActTimerToggle] = "<path d='m6 9 6 6 6-6'/>",
+	[ActTimerFoldOpen] = "<path d='m6 15 6-6 6 6'/>",
+	[ActPresetPrevious] = "<path d='m14.5 6-6 6 6 6'/>",
+	[ActPresetNext] = "<path d='m9.5 6 6 6-6 6'/>",
 };
 
 /* Runware layout concepts redrawn on the bar's 24px outline grid. */
@@ -465,12 +469,17 @@ static const char *layout_icons[] = {
 	"<rect x='7' y='8' width='14' height='12' rx='1.5'/>",
 };
 
-static const char *usage_icons[UsageCount] = {
+static const char *usage_icons[MetricControl] = {
 	[UsageCpu] = "<rect x='5' y='5' width='14' height='14' rx='2.5'/>"
 	             "<rect x='9' y='9' width='6' height='6' rx='1'/>"
 	             "<path d='M9 2.5V5m6-2.5V5M9 19v2.5m6-2.5v2.5M2.5 9H5m-2.5 6H5m14-6h2.5m-2.5 6h2.5'/>",
 	[UsageRam] = "<rect x='2.5' y='6.5' width='19' height='10' rx='1.5'/>"
 	             "<path d='M6 10h4v3H6zM14 10h4v3h-4zM6 16.5v3m4-3v3m4-3v3m4-3v3'/>",
+	[UsageGpu] = "<rect x='3' y='6' width='18' height='12' rx='2'/>"
+	             "<circle cx='11' cy='12' r='3.6'/><path d='M11 8.4 12 12l-3 2.8M4 18v2m3 0h5m5-10v4M1.5 8v8'/>",
+	[MetricNetwork] = "<path d='M7.5 4v16M4 7.5 7.5 4 11 7.5M16.5 20V4M13 16.5l3.5 3.5 3.5-3.5'/>",
+	[MetricDisk] = "<rect x='4' y='3' width='16' height='18' rx='3'/><circle cx='12' cy='10' r='3.5'/>"
+	               "<path d='m12 10 4 6m-8 1h.01'/>",
 };
 
 /* The silhouette and fill share a 24px grid so the level clips cleanly. */
@@ -509,7 +518,7 @@ icon(Frame *f, int id, cui_rect rect, const char *paths, cui_color fg, cui_icon_
 
 static cui_icon_state icon_states[COUNT(icons)];
 static cui_icon_state layout_states[COUNT(layout_icons)];
-static cui_icon_state usage_states[UsageCount];
+static cui_icon_state usage_states[MetricControl];
 static cui_icon_state control_outline_states[ControlCount], control_fill_states[ControlCount];
 static cui_icon_state charge_state, mute_state;
 
@@ -520,7 +529,7 @@ shell_icons_free(void)
 		cui_icon_state_destroy(&icon_states[i]);
 	for (int i = 0; i < COUNT(layout_states); ++i)
 		cui_icon_state_destroy(&layout_states[i]);
-	for (int i = 0; i < UsageCount; ++i)
+	for (int i = 0; i < MetricControl; ++i)
 		cui_icon_state_destroy(&usage_states[i]);
 	for (int i = 0; i < ControlCount; ++i) {
 		cui_icon_state_destroy(&control_outline_states[i]);
@@ -659,14 +668,28 @@ surface_color(const Frame *f, int scheme)
 
 static void
 bar_clock(Frame *f, cui_rect r, const char *text, enum ShellAction action, int id,
-          cui_color bg, cui_color fg, cui_color accent, int with_icon)
+          cui_color bg, cui_color fg, cui_color accent, int with_icon, double progress)
 {
 	if (r.w < 12)
 		return;
 	if (inside(r, f->hover_x, f->hover_y))
 		box(f, id, r, MIN(f->config->segradius, 7), blend(bg, fg, 0.12f * f->hover), transparent, 0, 0);
-	if (with_icon)
-		glyph(f, id + 1, r.x + 7, r.y + (r.h - 18) / 2, 18, action, accent);
+	if (with_icon) {
+		float xx = r.x + 7, yy = r.y + (r.h - 18) / 2;
+		if (progress < 0) {
+			glyph(f, id + 1, xx, yy, 18, action, accent);
+		} else {
+			cui_rect circle = {xx+2, yy+2, 14, 14};
+			box(f, 116, circle, 7, blend(bg, accent, 0.18f), accent, 1, 0);
+			float fill = roundf(14 * progress);
+			if (fill > 0) {
+				cui_rect window = {circle.x, circle.y+14-fill, circle.w, fill};
+				cui_begin_absolute_box(f->ui, 117, (cui_box){.width = 14, .height = fill, .clip = true}, window);
+				box(f, 118, (cui_rect){0, fill-14, 14, 14}, 7, accent, transparent, 0, 0);
+				cui_end_box(f->ui);
+			}
+		}
+	}
 	int pad = with_icon ? 31 : 3;
 	label(f, id + 2, (cui_rect){r.x + pad, r.y, r.w - pad - 3, r.h}, text,
 	      fg, f->size, mono, CUI_ALIGN_CENTER);
@@ -802,23 +825,11 @@ bar_layout(Frame *f, cui_rect r, int layout, cui_color accent)
 	hit(f, r, ActLayout, 0);
 }
 
-static void
-bar_time_progress(Frame *f, cui_rect r, const ShellTimer *timer, time_t now, double tick,
-                  cui_color bg, cui_color accent)
-{
-	int thickness = f->config->timerprogressheight;
-	if (!timer->active || !thickness || r.w < 20)
-		return;
-	cui_rect rail = {r.x+5, r.y+r.h-1-thickness, r.w-10, thickness};
-	double remaining = shell_timer_remaining(timer, now, tick);
-	float elapsed = 1 - fmin(fmax(remaining / timer->duration, 0), 1);
-	box(f, 30, rail, thickness/2.f, blend(bg, accent, 0.35f), transparent, 0, 0);
-	rail.w = MAX(thickness, roundf(rail.w * elapsed));
-	box(f, 31, rail, thickness/2.f, accent, transparent, 0, 0);
-}
-
 enum { GroupPadding = 8, GroupGap = 9, SystemGap = 5, UsageIconSize = 18, LoadMinWidth = 18 };
-static const char *metric_name[MetricCount] = {"CPU utilization", "RAM utilization", "Load average"};
+static const char *metric_name[MetricControl] = {
+	[UsageCpu] = "CPU utilization", [UsageGpu] = "GPU utilization", [UsageRam] = "RAM utilization",
+	[MetricLoad] = "Load average", [MetricNetwork] = "Network activity", [MetricDisk] = "Disk activity",
+};
 
 static const cui_chart_datum *
 latest_usage(const ShellUsage *usage)
@@ -921,7 +932,7 @@ bar_load(Frame *f, const ShellSystem *system, cui_rect r, cui_color fg, cui_colo
 	 * while keeping low load differences legible in a short track. */
 	int capacity = round(height * sqrt(1 / 1.5));
 	for (int i = 0; i < LoadPeriods; ++i, x += width + gap) {
-		int id = 82 + 3*i;
+		int id = 100 + 3*i;
 		box(f, id, (cui_rect){x, y, width, height}, radius, alpha(fg, 29), transparent, 0, 0);
 		if (system->load_valid && system->load[i] > 0) {
 			double ratio = system->load[i] / system->cpus;
@@ -931,6 +942,48 @@ bar_load(Frame *f, const ShellSystem *system, cui_rect r, cui_color fg, cui_colo
 			    color, transparent, 0, 0);
 		}
 		box(f, id+2, (cui_rect){x, y+height-capacity, width, 1}, 0, alpha(fg, 104), transparent, 0, 0);
+	}
+}
+
+static void
+bar_traffic(Frame *f, const Traffic *traffic, int metric, cui_rect r, cui_color fg, cui_color accent)
+{
+	int network = metric == MetricNetwork;
+	int id = network ? 2200 : 2250;
+	cui_rect symbol = {r.x, r.y + ((int)r.h-UsageIconSize)/2, UsageIconSize, UsageIconSize};
+	icon(f, id, symbol, usage_icons[metric], accent, &usage_states[metric]);
+	int left = r.x + UsageIconSize + SystemGap;
+	int width = (int)(r.x + r.w) - left;
+	if (width < 12)
+		return;
+	int middle = r.y + (int)r.h/2;
+	int half = MIN(10, ((int)r.h - 8)/2);
+	int cols = MIN(TRAFFIC_SAMPLES, width/3);
+	int first = MAX(0, traffic->count-cols);
+	double peak = network ? 64*1024 : 1024*1024;
+	for (int i = first; i < traffic->count; ++i)
+		for (int k = 0; k < 2; ++k)
+			peak = fmax(peak, traffic->history[i][k]);
+	box(f, id+1, (cui_rect){left, middle, width, 1}, 0, alpha(fg, 52), transparent, 0, 0);
+	for (int i = 0; i < cols; ++i) {
+		int sample = traffic->count - cols + i;
+		int x = left + i*width/cols;
+		int w = (i+1)*width/cols - i*width/cols - 1;
+		for (int k = 0; k < 2; ++k) {
+			double value = sample < 0 ? 0 : traffic->history[sample][k];
+			int height = value > 0 ? MAX(1, round(half * sqrt(value / peak))) : 0;
+			cui_color color = k ? blend(accent, fg, 0.54f) : accent;
+			if (!network) {
+				/* Read and write use two parallel rows, both filling upward. */
+				int floor = middle + (k ? half+1 : -2);
+				box(f, id+2+i*4+k, (cui_rect){x, floor-1, w, 1}, 0, alpha(fg, 48), transparent, 0, 0);
+				height = height ? MAX(1, height-2) : 0;
+				box(f, id+4+i*4+k, (cui_rect){x, floor-height, w, height}, 1, color, transparent, 0, 0);
+			} else {
+				box(f, id+2+i*4+k, (cui_rect){x, k ? middle+2 : middle-height, w, height},
+				    1, color, transparent, 0, 0);
+			}
+		}
 	}
 }
 
@@ -954,7 +1007,7 @@ typedef struct {
 } BarSlot;
 
 static const enum BarItem item_priority[] = {
-	BarTags, BarTime, BarBattery, BarVolume, BarBrightness, BarCpu, BarRam, BarLoad,
+	BarTags, BarTime, BarBattery, BarVolume, BarBrightness, BarCpu, BarGpu, BarRam, BarLoad, BarNetwork, BarDisk,
 	BarLayout, BarDate, BarTray, BarStatus, BarTitle,
 };
 
@@ -1093,10 +1146,10 @@ bar_item_draw(Frame *f, ShellBar *bar, const ShellBarModel *m, enum BarItem kind
 		r.y += 2;
 		r.h -= 4;
 		int with_icon = r.w >= textwidth(f, text, f->size, mono) + 34;
+		double progress = is_time && timer->active && c->timer_indicator && timer->duration > 0
+		                  ? 1 - fmin(fmax(shell_timer_remaining(timer, now, tick) / timer->duration, 0), 1) : -1;
 		bar_clock(f, r, text, is_time ? ActClock : ActCalendar,
-		          is_time ? 15 : 11, bg, fg, accent, with_icon);
-		if (is_time)
-			bar_time_progress(f, r, timer, now, tick, bg, accent);
+		          is_time ? 15 : 11, bg, fg, accent, with_icon, progress);
 		break;
 	}
 	case BarTray: {
@@ -1110,17 +1163,26 @@ bar_item_draw(Frame *f, ShellBar *bar, const ShellBarModel *m, enum BarItem kind
 		break;
 	}
 	case BarCpu:
+	case BarGpu:
 	case BarRam: {
-		int metric = kind == BarCpu ? UsageCpu : UsageRam;
+		int metric = kind - BarCpu;
+		int history[] = {c->cpu_history, c->gpu_history, c->ram_history};
 		bar->metrics[metric] = group_rect(f, r);
-		bar_usage(f, &bar->usage_charts[metric], &m->system->usage[metric], metric,
-		          metric == UsageCpu ? c->cpu_history : c->ram_history, r, fg, accent);
+		bar_usage(f, &bar->usage_charts[metric], &m->system->usage[metric], metric, history[metric], r, fg, accent);
 		break;
 	}
 	case BarLoad:
 		bar->metrics[MetricLoad] = group_rect(f, r);
 		bar_load(f, m->system, r, fg, accent);
 		break;
+	case BarNetwork:
+	case BarDisk: {
+		int metric = kind - BarCpu;
+		bar->metrics[metric] = group_rect(f, r);
+		bar_traffic(f, kind == BarNetwork ? &m->system->activity.network : &m->system->activity.disk,
+		            metric, r, fg, accent);
+		break;
+	}
 	case BarBattery:
 	case BarVolume:
 	case BarBrightness: {
@@ -1199,8 +1261,11 @@ shell_bar_draw(const ShellHost *host, const ShellFont *font, unsigned revision,
 		[BarTitle] = {title, MIN(38, title), 0},
 		[BarStatus] = {statusw, MIN(statusw, 24), 0},
 		[BarCpu] = {UsageIconSize+SystemGap+c->cpu_width, UsageIconSize, 0},
+		[BarGpu] = {UsageIconSize+SystemGap+c->gpu_width, UsageIconSize, 0},
 		[BarRam] = {UsageIconSize+SystemGap+c->ram_width, UsageIconSize, 0},
 		[BarLoad] = {c->load_width, LoadMinWidth, 0},
+		[BarNetwork] = {UsageIconSize+SystemGap+c->network_width, UsageIconSize, 0},
+		[BarDisk] = {UsageIconSize+SystemGap+c->disk_width, UsageIconSize, 0},
 		[BarDate] = {dw+39, dw+6, 0},
 		[BarTime] = {cw+39, cw+6, 0},
 		[BarTray] = {m->tray_width, host->shape ? MIN(m->tray_width, 16) : m->tray_width, 0},
@@ -1281,7 +1346,7 @@ shell_bar_draw(const ShellHost *host, const ShellFont *font, unsigned revision,
 			    kind != BarTags && kind != BarDate && kind != BarTime && kind != BarTray)
 				box(&child, id+16+j, (cui_rect){x-2, item_y+3, width+4, height-6}, radius,
 				    blend(bg, c->palette[SchemeStatus][ColFg], 0.08f), transparent, 0, 0);
-			if (sliding && kind >= BarCpu && kind <= BarLoad)
+			if (sliding && kind >= BarCpu && kind <= BarDisk)
 				visible_charts[kind-BarCpu] = group_rect(&child, item);
 			else
 				bar_item_draw(&child, bar, m, kind, item, date, clock, timer, now, tick, duration, bg, accent);
@@ -1334,6 +1399,18 @@ shell_tooltip_close(const ShellHost *host, ShellTooltip *tip)
 	*tip = (ShellTooltip){0};
 }
 
+static void
+format_rate(char *text, size_t size, double rate)
+{
+	const char *units[] = {"B/s", "KiB/s", "MiB/s", "GiB/s"};
+	int unit = 0;
+	while (rate >= 1024 && unit < 3) {
+		rate /= 1024;
+		++unit;
+	}
+	snprintf(text, size, unit ? "%.1f %s" : "%.0f %s", rate, units[unit]);
+}
+
 void
 shell_tooltip_draw(const ShellHost *host, const ShellFont *font, unsigned revision,
                    const Config *c, ShellTooltip *tip, const ShellSystem *system,
@@ -1343,19 +1420,24 @@ shell_tooltip_draw(const ShellHost *host, const ShellFont *font, unsigned revisi
 	int load = metric == MetricLoad;
 	int kind = metric - MetricControl;
 	const char *name = kind >= 0 ? control_name[kind] : metric_name[metric];
+	if (metric == UsageGpu && system->activity.gpu_kind == GpuAwake)
+		name = "GPU active time";
+	const Traffic *traffic = metric == MetricNetwork ? &system->activity.network
+	                         : metric == MetricDisk ? &system->activity.disk : NULL;
 	const ControlReading *reading = kind >= 0 ? &controls->reading[kind] : NULL;
 	float size = fmaxf(11, font->size - 3);
 	Frame f = {.font = font, .config = c, .composite = host->composited, .size = size};
 	int pad = host->composited && c->shadows && c->shadow_opacity ? 4*c->bar_shadow_blur : 0;
 	int row = ceilf(size) + 8;
-	const char *example = reading && !reading->available ? "Unavailable"
+	int gpu_missing = metric == UsageGpu && system->activity.gpu_kind == GpuUnavailable;
+	const char *example = (reading && !reading->available) || gpu_missing ? "Unavailable"
 	                      : reading && reading->muted ? "Muted" : "100%";
-	int width = load ? 13*size : textwidth(&f, name, size, medium) +
+	int width = load || traffic ? 13*size : textwidth(&f, name, size, medium) +
 	            textwidth(&f, example, size, mono) + 2*padding + 14;
 	if (!reading)
 		width = MAX(width, textwidth(&f, "Update interval", size-2, regular) +
 		            textwidth(&f, "60000 ms", size-2, mono) + 2*padding + 14);
-	int rows = load ? 3 : 1;
+	int rows = load || traffic ? 3 : 1;
 	int height = (rows + !reading)*row + 12;
 	int w = width + 2*pad, h = height + 2*pad;
 	if (w > monitor.w || h + anchor.h + gap > monitor.h) {
@@ -1409,6 +1491,17 @@ shell_tooltip_draw(const ShellHost *host, const ShellFont *font, unsigned revisi
 			label(&f, 4+i*2, (cui_rect){xx, pad+6+2*row, col, row}, text,
 			      value_color, size, mono, CUI_ALIGN_CENTER);
 		}
+	} else if (traffic) {
+		const char *labels[] = {metric == MetricNetwork ? "Download" : "Read",
+		                        metric == MetricNetwork ? "Upload" : "Write"};
+		for (int i = 0; i < 2; ++i) {
+			char rate[40] = "–";
+			if (traffic->count)
+				format_rate(rate, sizeof rate, traffic->history[traffic->count-1][i]);
+			cui_rect line = {pad+padding, pad+6+(i+1)*row, inner, row};
+			label(&f, 3+i*2, line, labels[i], muted, size-1, regular, CUI_ALIGN_START);
+			label(&f, 4+i*2, line, rate, i ? blend(accent, fg, 0.54f) : accent, size, mono, CUI_ALIGN_END);
+		}
 	} else if (reading) {
 		char text[20] = "Unavailable";
 		int value = kind == ControlBattery ? reading->level : controls_value(controls, kind);
@@ -1419,10 +1512,12 @@ shell_tooltip_draw(const ShellHost *host, const ShellFont *font, unsigned revisi
 		label(&f, 3, (cui_rect){pad+padding, pad+6, inner, row}, text,
 		      reading->available ? control_color(c, kind, value, accent) : muted, size, mono, CUI_ALIGN_END);
 	} else {
-		char text[8] = "–";
+		char text[20] = "–";
 		const cui_chart_datum *latest = latest_usage(&system->usage[metric]);
 		if (latest)
 			snprintf(text, sizeof text, "%d%%", (int)round(latest->value));
+		else if (gpu_missing)
+			snprintf(text, sizeof text, "Unavailable");
 		label(&f, 3, (cui_rect){pad+padding, pad+6, inner, row}, text,
 		      latest ? usage_color(c, accent, latest->value) : muted, size, mono, CUI_ALIGN_END);
 	}
@@ -1466,6 +1561,31 @@ shell_calendar_shift(ShellPanel *panel, int months)
 	panel->month = month % 12;
 }
 
+enum { ClockHeader = 54, ClockZone = 40, ClockFooter = 44, ClockEditor = 130, ClockCancel = 47 };
+
+static int
+clock_height(const Config *config, int limit, int open, int active, int *zone_rows)
+{
+	int base = ClockHeader + ClockFooter + (open ? (active ? ClockCancel : ClockEditor) : 0);
+	*zone_rows = MAX(0, MIN(config->nzones+1, (limit-base)/ClockZone));
+	return base + *zone_rows*ClockZone;
+}
+
+void
+shell_clock_resize(const ShellHost *host, const Config *config, ShellPanel *panel, int open, int active)
+{
+	int rows;
+	int height = clock_height(config, panel->clock_limit, open, active, &rows);
+	if (height > panel->clock_limit)
+		return;
+	panel->timer_open = open;
+	panel->zone_rows = rows;
+	panel->height = height;
+	panel->preset_area = (cui_rect){0};
+	int y = panel->clock_anchor - (config->topbar ? 0 : height + 2*panel->pad);
+	XMoveResizeWindow(host->dpy, panel->win, panel->window_x, y, panel->width+2*panel->pad, height+2*panel->pad);
+}
+
 int
 shell_panel_open(const ShellHost *host, const Config *config, ShellPanel *panel,
                  enum ShellAction kind, int monitor, int x, int y, int w, int h,
@@ -1486,12 +1606,13 @@ shell_panel_open(const ShellHost *host, const Config *config, ShellPanel *panel,
 	                          : by + bar_inset - separation + pad;
 	int available = kind == ActPalette ? y + h - py - 8
 	                : config->topbar ? y + h - py - 6 : py - y - 6;
-	int timer_presets = (config->nin_presets || config->at_presets) && available - 2*pad >= 326;
-	int clock_base = timer_presets ? 286 : 246;
-	int zone_rows = MAX(1, MIN(config->nzones + 1, (available - clock_base - 2*pad)/40));
-	int height = control >= 0 ? 113 : kind == ActCalendar ? 364 : kind == ActPalette ? 420 : clock_base + zone_rows*40;
+	int zone_rows = 0, clock_anchor = py, clock_limit = available - 2*pad;
+	int height = control >= 0 ? (control == ControlBattery ? 134 : 113)
+	             : kind == ActCalendar ? 364 : kind == ActPalette ? 420
+	             : clock_height(config, clock_limit, 0, 0, &zone_rows);
 	height = MIN(height, available - 2*pad);
-	if (height < (control >= 0 ? 100 : kind == ActClock ? 280 : kind == ActCalendar ? 240 : 160))
+	if (height < (control >= 0 ? 100 : kind == ActClock ? ClockHeader+ClockFooter+ClockZone
+	              : kind == ActCalendar ? 240 : 160))
 		return 0;
 	int px = kind == ActPalette ? x + (w - width)/2 - pad : anchor - width/2 - pad;
 	int margin = MIN(config->barmargin, (w - width)/2);
@@ -1504,7 +1625,8 @@ shell_panel_open(const ShellHost *host, const Config *config, ShellPanel *panel,
 	localtime_r(&now, &local);
 	*panel = (ShellPanel){.kind = kind, .monitor = monitor, .width = width,
 	                      .height = height, .pad = pad, .year = local.tm_year+1900, .month = local.tm_mon,
-	                      .zone_rows = zone_rows, .timer_presets = timer_presets,
+	                      .zone_rows = zone_rows, .clock_limit = clock_limit, .clock_anchor = clock_anchor,
+	                      .window_x = px,
 	                      .hover_x = -1, .hover_y = -1, .control_request = -1,
 	                      .opened = shell_seconds()};
 	XSetWindowAttributes attrs = {
@@ -1542,19 +1664,80 @@ shell_panel_close(const ShellHost *host, ShellPanel *panel)
 }
 
 static void
+text_link(Frame *f, int id, cui_rect r, const char *text, float size, cui_color fg,
+          enum ShellAction action, time_t value, int mono_text)
+{
+	if (inside(r, f->hover_x, f->hover_y))
+		box(f, id, r, f->config->panelradius, alpha(fg, 25), transparent, 0, 0);
+	label(f, id+1, r, text, fg, size, mono_text ? mono : medium, CUI_ALIGN_CENTER);
+	hit(f, r, action, value);
+}
+
+static void
+calendar_grid(Frame *f, const ShellPanel *p, cui_color fg, cui_color accent, cui_color ink, cui_color card)
+{
+	int months = p->calendar_view == CalendarMonths;
+	int first = months ? 0 : p->browse_year;
+	float x = p->pad+17, y = p->pad+69, width = p->width-34;
+	float row = (p->height-127)/4.0f, col = width/3;
+	for (int i = 0; i < 12 && (months || first+i < 10000); ++i) {
+		int value = first+i;
+		int current = months ? p->browse_year == p->year && value == p->month : value == p->year;
+		char text[32];
+		if (months) {
+			struct tm month = {.tm_mon = value};
+			strftime(text, sizeof text, "%b", &month);
+		} else {
+			snprintf(text, sizeof text, "%d", value);
+		}
+		cui_rect r = {x+i%3*col, y+i/3*row, col-5, row-5};
+		int id = 200+i*3;
+		box(f, id, r, f->config->panelradius, current ? accent : card, transparent, 0, 0);
+		text_link(f, id+1, r, text, f->size, current ? ink : fg,
+		          months ? ActCalendarMonth : ActCalendarYear, value, !months);
+	}
+}
+
+static void
 calendar(Frame *f, const ShellPanel *p, const struct tm *local, cui_color fg,
          cui_color muted, cui_color accent, cui_color ink, cui_color card)
 {
 	struct tm first = {.tm_year = p->year-1900, .tm_mon = p->month, .tm_mday = 1, .tm_hour = 12, .tm_isdst = -1};
 	mktime(&first);
-	char heading[96];
-	strftime(heading, sizeof heading, "%B %Y", &first);
 	float x = p->pad, y = p->pad, w = p->width, h = p->height;
-	label(f, 110, (cui_rect){x+18, y+12, w-120, 36}, heading, fg,
-	      f->size + 5, medium, CUI_ALIGN_START);
+	float header_room = MAX(55, w-124);
+	char year[24];
+	if (p->calendar_view == CalendarYears) {
+		snprintf(year, sizeof year, "%d – %d", p->browse_year, MIN(9999, p->browse_year+CalendarYearPage-1));
+		text_link(f, 110, (cui_rect){x+15, y+12, MIN(137, header_room), 36}, year, f->size, accent,
+		          ActYearGrid, 0, 1);
+	} else if (p->calendar_view == CalendarMonths) {
+		snprintf(year, sizeof year, "%d", p->browse_year);
+		text_link(f, 110, (cui_rect){x+15, y+12, MIN(92, header_room), 36}, year, f->size+3, accent,
+		          ActYearGrid, 0, 1);
+	} else {
+		char month[64];
+		strftime(month, sizeof month, "%B", &first);
+		float vacancy = MAX(27, header_room-55);
+		if (textwidth(f, month, f->size+2, medium) + 10 > vacancy)
+			strftime(month, sizeof month, "%b", &first);
+		float month_width = MIN(vacancy, textwidth(f, month, f->size+2, medium)+14);
+		snprintf(year, sizeof year, "%d", p->year);
+		text_link(f, 110, (cui_rect){x+13, y+12, month_width, 36}, month, f->size+2, fg, ActMonthGrid, 0, 0);
+		text_link(f, 113, (cui_rect){x+13+month_width, y+12, 55, 36}, year, f->size, accent, ActYearGrid, 0, 1);
+	}
 	button(f, 120, (cui_rect){x+w-100, y+12, 38, 36}, "", ActPast, card, fg, 18);
 	button(f, 130, (cui_rect){x+w-55, y+12, 38, 36}, "", ActFuture, card, fg, 18);
 	box(f, 140, (cui_rect){x+17, y+56, w-34, 1}, 0, card, transparent, 0, 0);
+	button(f, 310, (cui_rect){x+17, y+h-44, 80, 32}, "Today", ActToday, card, fg, 0);
+	char today[80];
+	strftime(today, sizeof today, "%A, %d %B", local);
+	label(f, 320, (cui_rect){x+108, y+h-44, w-125, 32}, today, muted,
+	      MAX(9, f->size-1), regular, CUI_ALIGN_END);
+	if (p->calendar_view != CalendarDays) {
+		calendar_grid(f, p, fg, accent, ink, card);
+		return;
+	}
 	int cell = (w - 34)/7;
 	int row = MAX(15, MIN(37, ((int)h - 138)/6));
 	float gridx = x + (w - 7*cell)/2;
@@ -1577,40 +1760,38 @@ calendar(Frame *f, const ShellPanel *p, const struct tm *local, cui_color fg,
 		cui_rect r = {gridx+(i%7)*cell+2, y+89+(i/7)*row, cell-4, row-2};
 		if (today)
 			box(f, 200+i, r, f->config->panelradius, accent, transparent, 0, 0);
+		else if (inside(r, f->hover_x, f->hover_y))
+			box(f, 200+i, r, f->config->panelradius, card, transparent, 0, 0);
 		char text[8];
 		snprintf(text, sizeof text, "%d", day);
 		label(f, 250+i, r, text, today ? ink : i%7 > 4 ? muted : fg,
 		      f->size, mono, CUI_ALIGN_CENTER);
+		hit(f, r, ActCalendarDay, p->year*10000 + (p->month+1)*100 + day);
 	}
-	button(f, 310, (cui_rect){x+17, y+h-44, 80, 32}, "Today", ActToday, card, fg, 0);
-	char today[80];
-	strftime(today, sizeof today, "%A, %d %B", local);
-	label(f, 320, (cui_rect){x+108, y+h-44, w-125, 32}, today, muted,
-	      MAX(9, f->size-1), regular, CUI_ALIGN_END);
 }
 
 static void
-timer_presets(Frame *f, int at, cui_rect row, time_t now, const struct tm *local,
-              cui_color card, cui_color fg, cui_color outline)
+timer_presets(Frame *f, ShellPanel *p, cui_rect row, time_t now, const struct tm *local,
+              cui_color accent)
 {
-	int count = at ? f->config->at_presets : f->config->nin_presets;
+	int count = p->at ? f->config->at_presets : f->config->nin_presets;
+	p->preset_area = row;
+	p->preset_more = 0;
 	if (!count)
 		return;
-	const int gap = 6;
-	float size = MAX(9, f->size-1);
-	float minimum = textwidth(f, at ? "00:00" : "00h00m", size, mono) + 8;
-	count = MIN(count, (row.w + gap) / (minimum + gap));
-	if (!count)
-		return;
+	const float side = 16, spacing = 7;
+	float size = MAX(9, f->size-2);
+	float left = row.x+side;
+	float right = row.x+row.w-side;
 	time_t candidate = now - local->tm_sec + 60;
 	int last_hour = -1;
 	for (int i = 0; i < count; ++i) {
 		time_t value;
 		char caption[16];
-		if (at) {
+		if (p->at) {
 			struct tm hour;
 			do {
-				if (difftime(candidate, now) > 12*3600 || !localtime_r(&candidate, &hour))
+				if (difftime(candidate, now) > 26*3600 || !localtime_r(&candidate, &hour))
 					return;
 				value = candidate;
 				candidate += 60;
@@ -1627,23 +1808,29 @@ timer_presets(Frame *f, int at, cui_rect row, time_t now, const struct tm *local
 			else
 				snprintf(caption, sizeof caption, "%dh", minutes/60);
 		}
-		float start = roundf(i * (row.w + gap) / count);
-		float end = roundf((i+1) * (row.w + gap) / count);
-		cui_rect r = {row.x+start, row.y, end-start-gap, row.h};
-		int id = 380 + i*2;
-		cui_color bg = inside(r, f->hover_x, f->hover_y) ? blend(card, fg, 0.13f) : card;
-		box(f, id, r, f->config->panelradius, bg, outline, 1, 0);
-		label(f, id+1, (cui_rect){r.x+4, r.y, r.w-8, r.h}, caption, fg, size, mono, CUI_ALIGN_CENTER);
-		hit(f, r, at ? ActTimerAtPreset : ActTimerInPreset, value);
+		if (i < p->preset_start)
+			continue;
+		float width = textwidth(f, caption, size, mono) + spacing;
+		if (left + width > right) {
+			p->preset_more = 1;
+			break;
+		}
+		text_link(f, 400+i*2, (cui_rect){left, row.y, width, row.h}, caption, size, accent,
+		          p->at ? ActTimerAtPreset : ActTimerInPreset, value, 1);
+		left += width;
 	}
+	if (p->preset_start)
+		button(f, 454, (cui_rect){row.x, row.y, side, row.h}, "", ActPresetPrevious, transparent, accent, 12);
+	if (p->preset_more)
+		button(f, 458, (cui_rect){right, row.y, side, row.h}, "", ActPresetNext, transparent, accent, 12);
 }
 
 static void
-world_clock(Frame *f, const ShellPanel *p, const ShellTimer *timer, const struct tm *local,
+world_clock(Frame *f, ShellPanel *p, const ShellTimer *timer, const struct tm *local,
             time_t now, double tick, cui_color fg, cui_color muted, cui_color accent,
             cui_color ink, cui_color card, cui_color outline)
 {
-	float x = p->pad, y = p->pad, w = p->width, h = p->height;
+	float x = p->pad, y = p->pad, w = p->width;
 	float small = MAX(9, f->size - 1);
 	float radius = f->config->panelradius;
 	float time_width = textwidth(f, "00:00", f->size, mono) + 2;
@@ -1657,7 +1844,7 @@ world_clock(Frame *f, const ShellPanel *p, const ShellTimer *timer, const struct
 	int first = MIN(p->zone_start, MAX(0, f->config->nzones+1-p->zone_rows));
 	for (int row = 0; row < p->zone_rows && first+row <= f->config->nzones; ++row) {
 		int i = first+row;
-		float yy = y+55+row*40;
+		float yy = y+ClockHeader+row*ClockZone;
 		struct tm zoned = *local;
 		const char *name = "Local time";
 		if (i) {
@@ -1676,47 +1863,54 @@ world_clock(Frame *f, const ShellPanel *p, const ShellTimer *timer, const struct
 		      small, regular, CUI_ALIGN_END);
 		label(f, 153+row*4, (cui_rect){x+w-27-time_width, yy, time_width, 36}, time, i ? fg : accent,
 		      f->size, mono, CUI_ALIGN_END);
+		if (!i)
+			hit(f, (cui_rect){x+17, yy, w-34, 36}, ActCopyTime, 0);
 	}
-	float title = h - (p->timer_presets ? 217 : 177);
-	box(f, 300, (cui_rect){x+17, y+title-8, w-34, 1}, 0, outline, transparent, 0, 0);
-	label(f, 301, (cui_rect){x+17, y+title, w-34, 28}, "Timer", fg, f->size+3, medium, CUI_ALIGN_START);
+	float fold = y + ClockHeader + p->zone_rows*ClockZone;
+	cui_rect disclosure = {x+17, fold+5, w-34, 32};
+	box(f, 300, (cui_rect){x+17, fold, w-34, 1}, 0, outline, transparent, 0, 0);
+	if (inside(disclosure, f->hover_x, f->hover_y))
+		box(f, 301, disclosure, radius, card, transparent, 0, 0);
+	label(f, 302, (cui_rect){x+24, fold+5, 82, 32}, "Timer", fg, f->size, medium, CUI_ALIGN_START);
+	glyph(f, 303, x+w-40, fold+13, 15, p->timer_open ? ActTimerFoldOpen : ActTimerToggle, accent);
+	hit(f, disclosure, ActTimerToggle, 0);
 	if (timer->active) {
 		int seconds = MAX(0, ceil(shell_timer_remaining(timer, now, tick)));
-		char remaining[48];
-		snprintf(remaining, sizeof remaining, "%02d:%02d:%02d remaining",
-		         seconds/3600, seconds/60%60, seconds%60);
-		int countdown_height = p->timer_presets ? 80 : 51;
-		box(f, 310, (cui_rect){x+17, y+title+41, w-34, countdown_height}, radius, card, outline, 1, 0);
-		label(f, 311, (cui_rect){x+27, y+title+41, w-54, countdown_height}, remaining, accent,
-		      f->size+3, mono, CUI_ALIGN_CENTER);
-		button(f, 320, (cui_rect){x+w-109, y+h-52, 92, 35}, "Cancel", ActTimerCancel, card, fg, 0);
+		char remaining[32];
+		snprintf(remaining, sizeof remaining, "%02d:%02d:%02d", seconds/3600, seconds/60%60, seconds%60);
+		label(f, 304, (cui_rect){x+103, fold+5, w-151, 32}, remaining, accent,
+		      f->size, mono, CUI_ALIGN_END);
+	}
+	p->preset_area = (cui_rect){0};
+	p->preset_more = 0;
+	if (!p->timer_open)
+		return;
+	if (timer->active) {
+		label(f, 309, (cui_rect){x+24, fold+43, w-145, 33}, "Alert scheduled", muted, small, regular, CUI_ALIGN_START);
+		button(f, 320, (cui_rect){x+w-103, fold+43, 86, 33}, "Cancel", ActTimerCancel, card, fg, 0);
 		return;
 	}
 	float bw = (w-40)/2;
-	button(f, 330, (cui_rect){x+17, y+title+32, bw, 36}, "Alert me in", ActIn,
+	button(f, 330, (cui_rect){x+17, fold+43, bw, 29}, "Alert me in", ActIn,
 	       p->at ? card : accent, p->at ? fg : ink, 0);
-	button(f, 340, (cui_rect){x+23+bw, y+title+32, bw, 36}, "Alert me at", ActAt,
+	button(f, 340, (cui_rect){x+23+bw, fold+43, bw, 29}, "Alert me at", ActAt,
 	       p->at ? accent : card, p->at ? ink : fg, 0);
-	cui_rect input = {x+17, y+title+79, w-132, 42};
+	cui_rect input = {x+17, fold+80, w-115, 35};
 	box(f, 350, input, radius, card, accent, 1, 0);
-	label(f, 351, (cui_rect){input.x+14, input.y, input.w-25, input.h},
+	label(f, 351, (cui_rect){input.x+12, input.y, input.w-21, input.h},
 	      p->input[0] ? p->input : p->at ? "HH:MM" : "Minutes / HH:MM:SS",
 	      p->input[0] ? fg : muted, small, mono, CUI_ALIGN_START);
 	char prefix[sizeof p->input];
 	snprintf(prefix, sizeof prefix, "%.*s", p->cursor, p->input);
 	float caret = prefix[0] ? textwidth(f, prefix, small, mono) : 0;
-	if (caret < input.w-24)
-		box(f, 352, (cui_rect){input.x+12+caret, input.y+11, 1, 20},
-		    0, accent, transparent, 0, 0);
+	if (caret < input.w-21)
+		box(f, 352, (cui_rect){input.x+10+caret, input.y+9, 1, 17}, 0, accent, transparent, 0, 0);
 	hit(f, input, ActTimerInput, 0);
-	button(f, 360, (cui_rect){x+w-105, input.y, 88, input.h}, "Set", ActTimerSet, accent, ink, 0);
-	if (p->timer_presets)
-		timer_presets(f, p->at, (cui_rect){x+17, y+title+130, w-34, 34},
-		              now, local, card, fg, outline);
-	label(f, 370, (cui_rect){x+17, y+h-47, w-34, 30},
-	      p->message[0] ? p->message : p->at ? "24-hour local time" : "Press Enter to start",
-	      p->message[0] ? f->config->palette[SchemeUrg][ColBg] : muted, small,
-	      regular, CUI_ALIGN_START);
+	button(f, 360, (cui_rect){x+w-90, input.y, 73, input.h}, "Set", ActTimerSet, accent, ink, 0);
+	timer_presets(f, p, (cui_rect){x+17, fold+121, w-34, 23}, now, local, accent);
+	if (p->message[0])
+		label(f, 370, (cui_rect){x+17, fold+147, w-34, 20}, p->message,
+		      f->config->palette[SchemeUrg][ColBg], small, regular, CUI_ALIGN_START);
 }
 
 static void
@@ -1810,14 +2004,30 @@ control_panel(Frame *f, ShellPanel *p, const Controls *controls, enum Control ki
 		snprintf(status, sizeof status, "Could not change %s", battery ? "charging limit" : control_name[kind]);
 	else if (!data->available)
 		snprintf(status, sizeof status, "%s unavailable", control_name[kind]);
-	else if (battery && data->limit >= 0)
-		snprintf(status, sizeof status, "Charge limit %d%%%s", shown, adjustable ? "" : " · Read-only");
-	else if (battery)
-		snprintf(status, sizeof status, "%s", data->detail[0] ? data->detail : "Charge level");
+	else if (battery) {
+		const char *state = !strcmp(data->detail, "Full") ? "Fully charged" : data->detail;
+		snprintf(status, sizeof status, "%s", *state ? state : "Charge level");
+		if (data->battery_seconds >= 0) {
+			int minutes = (int)ceil(data->battery_seconds / 60.0);
+			char estimate[32];
+			if (minutes >= 60)
+				snprintf(estimate, sizeof estimate, "~%dh %02dm", minutes/60, minutes%60);
+			else
+				snprintf(estimate, sizeof estimate, "~%dm", MAX(1, minutes));
+			snprintf(status + strlen(status), sizeof status - strlen(status), " · %s %s", estimate,
+			         data->charging ? "to charge" : "left");
+		}
+	}
 	else if (data->muted)
 		snprintf(status, sizeof status, "Muted");
 	label(f, 116, (cui_rect){x+17, track.y+track.h, w-34, 22}, status, muted,
 	      MAX(11, f->size-4), regular, CUI_ALIGN_START);
+	if (battery && data->limit >= 0 && p->height >= 130) {
+		char limit[40];
+		snprintf(limit, sizeof limit, "Charge limit %d%%", shown);
+		label(f, 117, (cui_rect){x+17, track.y+track.h+19, w-34, 21}, limit, muted,
+		      MAX(10, f->size-5), regular, CUI_ALIGN_START);
+	}
 }
 
 int

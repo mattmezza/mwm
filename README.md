@@ -91,7 +91,7 @@ Xinerama, comment out the two `XINERAMA*` lines in `config.mk`.
 
 ### Publish a release
 
-Commit the changes you want to ship, then run `make release name=v0.1.1`.
+Commit the changes you want to ship, then run `make release name=v0.2.0`.
 Release tags use `vMAJOR.MINOR.PATCH`.
 The target tags the current commit and pushes the tag to `origin`. GitHub
 Actions builds and smoke-tests `mwm` and `mwmc` for Linux x86-64 and ARM64
@@ -204,8 +204,10 @@ The default config assigns tag 1 to monitor 0. Set `1 = -1` under
 - Click a tag to view it or scroll over the tags to cycle them. Scroll over the
   layout icon to cycle layouts. Left-click it for the next layout or right-click
   it for the previous one.
-- The system segment shows CPU and RAM history and three load-average bars
-  for 1, 5, and 15 minutes. Hover over a metric to see its reading and the shared
+- The system segment shows CPU, GPU, and RAM history, three load averages,
+  mirrored download and upload traffic, and separate disk read and write histories.
+  GPU readings use AMD busy percentage or Intel i915 active time when available.
+  Hover over a metric to see its reading and the shared
   update interval. Scroll up for faster sampling or down for slower sampling,
   from 125 ms to 5 seconds.
   RAM usage is the share of usable memory reported as unavailable. By default
@@ -221,18 +223,22 @@ The default config assigns tag 1 to monitor 0. Set `1 = -1` under
   Volume uses WirePlumber's `wpctl`. Brightness uses `brightnessctl` on the
   selected backlight. The battery icon shows actual charge, while its slider
   controls the charging limit on devices that allow the user to write it.
-  On other devices the battery popup shows the charge with a read-only track.
+  The popup shows charging state and estimates time to charge or discharge when
+  the battery driver provides enough data.
   Set devices, scroll steps, refresh rate, and popup width under `[controls]`.
-- Click the date for the monthly calendar. The arrows or Left and Right change
-  the month. **Today** or Home returns to the current month.
-- Click the time to see local time and the configured world clocks. Choose
+- Click the date for the monthly calendar. Click the month or year heading to
+  open its picker. The arrows page through months, years, or 12-year groups.
+  **Today** or Home returns to the current month. Right-click the bar date or
+  a calendar day to copy a date in `YYYY-MM-DD` format.
+- Click the time to see local time and the configured world clocks. Open **Timer** and choose
   **Alert me in** for a duration expressed as minutes, `HH:MM`, or `HH:MM:SS`,
   or **Alert me at** for the next occurrence of a 24-hour local `HH:MM`. The
-  timer field is ready to type when the panel opens. Use the number row or
+  timer field is ready to type when you expand the editor. Use the number row or
   keypad, then press Enter or click **Set**. Click a duration or upcoming local
-  hour in the quick-start row to start immediately. A thin progress line follows
-  the timer along the bottom of the hour, and the panel displays its countdown
-  and a Cancel button. Customize the quick-start row under `[clock]`.
+  hour in the horizontally scrollable quick-start row to start immediately.
+  The clock icon fills as the timer advances. Reopen **Timer** to cancel it.
+  Right-click the time to copy an ISO timestamp with seconds and the local UTC
+  offset. Customize the quick-start row under `[clock]`.
 - Click the focused title or run `mwmc palette` to search for windows by title or
   class, jump to tags, or change layouts. Use Up, Down, and Enter to select.
   Right-click the title to copy the window name to the clipboard.
@@ -271,7 +277,7 @@ segments = tags, title | | status, system, power, datetime, tray
 
 [segments]
 tags = spaces, layout
-system = cpu, ram, load
+system = cpu, gpu, ram, load, network, disk
 power = battery, volume, brightness
 datetime = date, time
 ```
