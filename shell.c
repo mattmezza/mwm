@@ -630,23 +630,16 @@ static float
 reveal(ShellBar *bar, ShellReveal *state, int shown, double tick, int duration)
 {
 	if (!duration || !bar->last_frame) {
-		*state = (ShellReveal){.level = shown, .shown = shown};
+		*state = (ShellReveal){.progress = shown, .shown = shown};
 		return shown;
 	}
-	if (state->shown != shown) {
-		state->from = state->level;
-		state->shown = shown;
-		state->started = tick;
-	}
-	if (state->started) {
-		float t = fmin(1, (tick - state->started) * 1000 / duration);
-		float eased = t*t*(3 - 2*t);
-		state->level = state->from + (shown - state->from) * eased;
-		if (t == 1)
-			state->started = 0;
-	}
-	bar->animating |= state->started != 0;
-	return state->level;
+	/* Play the same easing curve backward when a segment closes, including
+	 * when it reverses before the transition has finished. */
+	double step = (tick - bar->last_frame) * 1000 / duration;
+	float t = fmin(1, fmax(0, state->progress + (state->shown ? step : -step)));
+	*state = (ShellReveal){.progress = t, .shown = shown};
+	bar->animating |= t != shown;
+	return t*t*(3 - 2*t);
 }
 
 static void

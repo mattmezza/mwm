@@ -42,9 +42,8 @@ typedef struct {
 } ShellHit;
 
 typedef struct {
-	float from, level;
+	float progress;
 	int shown;
-	double started;
 } ShellReveal;
 
 enum { UsageCpu, UsageRam, UsageCount };
