@@ -15,6 +15,8 @@
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 
+enum { ReadControl = -1, ToggleControl = -2 };
+
 static int
 attribute(const char *device, const char *key, char *out, size_t size)
 {
@@ -141,23 +143,33 @@ read_battery(const Config *config, int request)
 }
 
 static ControlReading
-read_brightness(const Config *config, int request)
+read_brightness(const Config *config, int request, int restore)
 {
-	ControlReading data = {.minimum = config->brightness_min};
+	ControlReading data = {.minimum = config->brightness_min, .brightness_restore = restore};
 	char device[384];
 	if (!find_device("/sys/class/backlight", config->backlight_device, "max_brightness", device))
 		return data;
 	int max = number(device, "max_brightness");
 	if (max <= 0)
 		return data;
-	if (request >= 0) {
-		char level[16];
-		int raw = MAX(1, (int)round((double)max * MAX(config->brightness_min, request) / 100));
-		snprintf(level, sizeof level, "%d", raw);
-		char *args[] = {"brightnessctl", "-q", "-c", "backlight", "-d", strrchr(device, '/') + 1, "set", level, NULL};
-		data.failed = !run(args, NULL, 0);
-	}
 	int current = number(device, "brightness");
+	if (current > 0)
+		data.brightness_restore = current;
+	if (request != ReadControl) {
+		char level[16];
+		int raw = request == ToggleControl
+		          ? (current > 0 ? 0 : restore > 0 ? MIN(restore, max) : MAX(1, max / 2))
+		          : MAX(1, (int)round((double)max * MAX(config->brightness_min, request) / 100));
+		snprintf(level, sizeof level, "%d", raw);
+		char *args[] = {"brightnessctl", "-q", "-c", "backlight", "-d", strrchr(device, '/') + 1,
+		                "-n0", "set", level, NULL};
+		data.failed = current < 0 || !run(args, NULL, 0);
+		current = number(device, "brightness");
+		if (request == ToggleControl && current != raw)
+			data.failed = 1;
+	}
+	if (current > 0)
+		data.brightness_restore = current;
 	data.available = current >= 0;
 	data.adjustable = data.available;
 	data.level = current < 0 ? 0 : MIN(100, (int)round(100.0 * current / max));
@@ -169,7 +181,10 @@ read_volume(const Config *config, int request)
 {
 	ControlReading data = {0};
 	char *sink = (char *)config->audio_sink;
-	if (request >= 0) {
+	if (request == ToggleControl) {
+		char *mute[] = {"wpctl", "set-mute", "--", sink, "toggle", NULL};
+		data.failed = !run(mute, NULL, 0);
+	} else if (request >= 0) {
 		char level[16];
 		snprintf(level, sizeof level, "%d%%", request);
 		char *set[] = {"wpctl", "set-volume", "--limit", "1.0", "--", sink, level, NULL};
@@ -197,7 +212,7 @@ controls_init(Controls *controls)
 {
 	*controls = (Controls){0};
 	for (int i = 0; i < ControlCount; ++i)
-		controls->jobs[i] = (ControlJob){.fd = -1, .queued = -1, .applying = -1};
+		controls->jobs[i] = (ControlJob){.fd = -1, .queued = ReadControl, .applying = ReadControl};
 }
 
 void
@@ -227,6 +242,8 @@ start(Controls *controls, enum Control kind, const Config *config, int xfd, doub
 		return 0;
 	}
 	int request = job->queued;
+	if (request == ReadControl && job->toggle)
+		request = ToggleControl;
 	pid_t pid = fork();
 	if (!pid) {
 		setpgid(0, 0);
@@ -235,7 +252,8 @@ start(Controls *controls, enum Control kind, const Config *config, int xfd, doub
 		close(fds[0]);
 		ControlReading data = kind == ControlBattery ? read_battery(config, request)
 		                      : kind == ControlVolume ? read_volume(config, request)
-		                                              : read_brightness(config, request);
+		                                              : read_brightness(config, request,
+		                                                  controls->reading[kind].brightness_restore);
 		ssize_t written;
 		do {
 			written = write(fds[1], &data, sizeof data);
@@ -251,7 +269,9 @@ start(Controls *controls, enum Control kind, const Config *config, int xfd, doub
 	job->fd = fds[0];
 	job->pid = pid;
 	job->applying = request;
-	job->queued = -1;
+	if (request == ToggleControl)
+		job->toggle = 0;
+	job->queued = ReadControl;
 	job->deadline = tick + 2;
 	return 1;
 }
@@ -276,29 +296,32 @@ controls_tick(Controls *controls, const Config *config, unsigned enabled, int xf
 			job->fd = -1;
 			if (bytes != sizeof data) {
 				data = *old;
-				data.failed = job->applying >= 0;
-				if (job->applying < 0)
+				data.failed = job->applying != ReadControl;
+				if (job->applying == ReadControl)
 					data.available = data.adjustable = 0;
 			}
-			if (job->applying < 0)
+			if (job->applying == ReadControl)
 				data.failed = old->failed;
 			*changed |= memcmp(old, &data, sizeof data) != 0;
 			*old = data;
-			job->applying = -1;
+			job->applying = ReadControl;
 		}
-		if (!(enabled & (1u << i)) && job->queued < 0)
+		int pending = job->queued != ReadControl || job->toggle;
+		if (!(enabled & (1u << i)) && !pending)
 			continue;
-		if (job->queued >= 0 || tick >= job->due) {
+		if (pending || tick >= job->due) {
 			job->due = tick + config->controls_interval / 1000.0;
-			if (i != ControlVolume && job->queued < 0) {
-				ControlReading data = i == ControlBattery ? read_battery(config, -1) : read_brightness(config, -1);
+			if (i != ControlVolume && !pending) {
+				ControlReading data = i == ControlBattery ? read_battery(config, ReadControl)
+				                      : read_brightness(config, ReadControl, old->brightness_restore);
 				data.failed = old->failed;
 				*changed |= memcmp(old, &data, sizeof data) != 0;
 				*old = data;
 			} else if (start(controls, i, config, xfd, tick))
 				timeout = MIN(timeout, 30);
-			else if (job->queued >= 0) {
-				job->queued = -1;
+			else if (pending) {
+				job->queued = ReadControl;
+				job->toggle = 0;
 				old->failed = *changed = 1;
 			}
 		}
@@ -323,8 +346,19 @@ void
 controls_set(Controls *controls, enum Control kind, int value)
 {
 	ControlReading *data = &controls->reading[kind];
-	if (data->available && data->adjustable)
-		controls->jobs[kind].queued = MAX(data->minimum, MIN(value, 100));
+	if (data->available && data->adjustable) {
+		ControlJob *job = &controls->jobs[kind];
+		job->queued = MAX(data->minimum, MIN(value, 100));
+		if (kind == ControlBrightness || (kind == ControlVolume && job->queued > 0))
+			job->toggle = 0;
+	}
+}
+
+void
+controls_toggle(Controls *controls, enum Control kind)
+{
+	if ((kind == ControlVolume || kind == ControlBrightness) && controls->reading[kind].adjustable)
+		controls->jobs[kind].toggle ^= 1;
 }
 
 int

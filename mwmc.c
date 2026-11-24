@@ -46,7 +46,7 @@ usage(void)
 	"  win center                      center a floating window\n"
 	"  (mouse: hold Super and drag = move, Super + right-drag = resize)\n"
 	"  query tags|windows|monitors|layout|state\n"
-	"  palette                         open the searchable command palette\n"
+	"  palette [toggle]                open or toggle the searchable command palette\n"
 	"  reload                          re-read config.ini and Xresources live\n"
 	"  restart                         replace mwm in place and restore the session\n"
 	"  completions bash|zsh            print a shell completion script (redirect it,\n"

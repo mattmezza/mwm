@@ -64,7 +64,7 @@ typedef struct {
 	ShellUsage usage[UsageCount];
 	double load[LoadPeriods];
 	long cpus;
-	int load_valid;
+	int load_valid, interval;
 } ShellSystem;
 
 typedef struct {
@@ -155,7 +155,7 @@ ShellHit shell_hit(const ShellHit *, int count, int x, int y);
 int shell_bar_draw(const ShellHost *, const ShellFont *, unsigned revision,
                     const Config *, ShellBar *, Window, const ShellBarModel *,
                     const ShellTimer *, time_t now, double tick);
-int shell_bar_metric(const ShellBar *);
+int shell_bar_metric(const ShellBar *, int x, int y);
 void shell_tooltip_hide(const ShellHost *, ShellTooltip *);
 void shell_tooltip_close(const ShellHost *, ShellTooltip *);
 void shell_tooltip_draw(const ShellHost *, const ShellFont *, unsigned revision,

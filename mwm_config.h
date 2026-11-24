@@ -7,6 +7,7 @@
 
 enum { MAX_TAGS = 100, MAX_RULES = 64, MAX_ZONES = 8, MAX_TIMER_PRESETS = 5, CONFIG_ERROR = 768 };
 enum { MAX_USAGE_SAMPLES = 120, MAX_USAGE_WIDTH = 200 };
+enum { SYSTEM_INTERVAL_MIN = 125, SYSTEM_INTERVAL_MAX = 5000 };
 enum { UsageWarning, UsageDanger, UsageColorCount };
 enum { SchemeNorm, SchemeSel, SchemeUrg, SchemeTitle, SchemeStatus, SchemeBar, SchemeLast };
 enum { ColFg, ColBg, ColBorder };
@@ -36,7 +37,7 @@ typedef struct {
 	int warpcursor, movemod, snap, defaultlayout, nmaster;
 	float mfact;
 	int topbar, showbar, barheight, barvertpad, barpadx, barmargin, barvmargin;
-	int barseggap, segradius, tagradius, titlealign, barfontsize;
+	int barseggap, segradius, tagradius, titlealign, barfontsize, separators;
 	BarPlacement segments[MAX_BAR_SEGMENTS];
 	int nsegments, custom_segments;
 	int timerprogressheight;

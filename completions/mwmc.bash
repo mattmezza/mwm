@@ -76,6 +76,8 @@ _mwmc()
         esac ;;
     query)
         [ "$cword" -eq 2 ] && COMPREPLY=( $(compgen -W "tags windows monitors layout state" -- "$cur") ) ;;
+    palette)
+        [ "$cword" -eq 2 ] && COMPREPLY=( $(compgen -W "toggle" -- "$cur") ) ;;
     completions)
         [ "$cword" -eq 2 ] && COMPREPLY=( $(compgen -W "bash zsh" -- "$cur") ) ;;
     esac

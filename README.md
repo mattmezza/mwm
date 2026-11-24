@@ -149,7 +149,7 @@ mwmc bar toggle|show|hide            # show/hide the bar
 mwmc traybar toggle|show|hide        # show/hide the system tray
 mwmc segment list                    # list configured segments and visibility
 mwmc segment toggle|show|hide <name> # control an individual segment
-mwmc palette                         # search windows, tags, and layouts
+mwmc palette [toggle]                # open or toggle the command palette
 mwmc reload | mwmc restart | mwmc quit | mwmc version
 
 # INTROSPECTION — for scripts, menus, and external keybinders
@@ -201,18 +201,23 @@ The default config assigns tag 1 to monitor 0. Set `1 = -1` under
 
 ## Bar and panels
 
-- Click a tag to view it. Scroll over the tag group to cycle tags. The layout
-  button cycles forwards with a left click and backwards with a right click.
+- Click a tag to view it or scroll over the tags to cycle them. Scroll over the
+  layout icon to cycle layouts. Left-click it for the next layout or right-click
+  it for the previous one.
 - The system segment shows CPU and RAM history and three load-average bars
-  for 1, 5, and 15 minutes. Hover over a metric to see its current reading.
+  for 1, 5, and 15 minutes. Hover over a metric to see its reading and the shared
+  update interval. Scroll up for faster sampling or down for slower sampling,
+  from 125 ms to 5 seconds.
   RAM usage is the share of usable memory reported as unavailable. By default
-  each 36 px history graph shows about 10 seconds at one sample every 250 ms.
+  each 36 px history graph shows about 20 seconds at one sample every 500 ms.
   The load bars share a scale, with a tick at one job per online logical CPU.
   Colors blend from the Xresources accent through `mwm.systemwarn` at 75%
   to `mwm.systemdanger` at 90% of capacity. Use `[system]` to customize
   chart widths, history lengths, sample interval, and hover delay.
 - The power segment shows filled battery, volume, and brightness icons.
   Hover for the exact level, scroll to adjust, or click to open a slider.
+  Right-click volume to mute or unmute. Right-click brightness to switch between
+  0% and the previous level. The first restore uses 50% if there's no previous reading.
   Volume uses WirePlumber's `wpctl`. Brightness uses `brightnessctl` on the
   selected backlight. The battery icon shows actual charge, while its slider
   controls the charging limit on devices that allow the user to write it.
@@ -230,6 +235,8 @@ The default config assigns tag 1 to monitor 0. Set `1 = -1` under
   and a Cancel button. Customize the quick-start row under `[clock]`.
 - Click the focused title or run `mwmc palette` to search for windows by title or
   class, jump to tags, or change layouts. Use Up, Down, and Enter to select.
+  Right-click the title to copy the window name to the clipboard.
+  Bind `mwmc palette toggle` to Super+Ctrl+Space to open and close it with that chord.
   Escape and outside clicks dismiss the panels.
 
 The timer uses `notify-send` and a desktop notification daemon by default.
@@ -250,6 +257,7 @@ Set `systraymon` in `[tray]` to pin it to a zero-based monitor index.
 The whole bar slides in from its screen edge and reverses the motion to close.
 Individual segments can also slide open and closed. Adjust timing with
 `duration` in `[motion]`, or enable `reduced_motion` for immediate changes.
+Set `separators = true` under `[bar]` to draw lines between items in a segment.
 
 Set `segments` under `[bar]` to arrange the left, center, and right groups.
 Order entries from left to right within each group. An entry can be a single

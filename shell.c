@@ -792,12 +792,10 @@ bar_tags(Frame *f, ShellBar *bar, cui_rect area, const ShellBarModel *m,
 }
 
 static void
-bar_layout(Frame *f, cui_rect r, int layout, cui_color bg, cui_color accent)
+bar_layout(Frame *f, cui_rect r, int layout, cui_color accent)
 {
 	if (layout < 0 || layout >= COUNT(layout_icons))
 		return;
-	if (inside(r, f->hover_x, f->hover_y))
-		box(f, 25, r, f->config->tagradius, blend(bg, accent, 0.10f), transparent, 0, 0);
 	int size = MIN(22, (int)MIN(r.h, r.w));
 	cui_rect image = {r.x + ((int)r.w-size)/2, r.y + ((int)r.h-size)/2, size, size};
 	icon(f, 26, image, layout_icons[layout], accent, &layout_states[layout]);
@@ -937,10 +935,10 @@ bar_load(Frame *f, const ShellSystem *system, cui_rect r, cui_color fg, cui_colo
 }
 
 int
-shell_bar_metric(const ShellBar *bar)
+shell_bar_metric(const ShellBar *bar, int x, int y)
 {
 	for (int i = 0; i < MetricCount; ++i)
-		if (inside(bar->metrics[i], bar->hover_x, bar->hover_y))
+		if (inside(bar->metrics[i], x, y))
 			return i;
 	return MetricNone;
 }
@@ -1072,7 +1070,7 @@ bar_item_draw(Frame *f, ShellBar *bar, const ShellBarModel *m, enum BarItem kind
 		bar_tags(f, bar, r, m, tick, duration);
 		break;
 	case BarLayout:
-		bar_layout(f, r, m->layout, bg, accent);
+		bar_layout(f, r, m->layout, accent);
 		break;
 	case BarTitle: {
 		cui_color ink = c->palette[SchemeTitle][ColFg];
@@ -1275,12 +1273,12 @@ shell_bar_draw(const ShellHost *host, const ShellFont *font, unsigned revision,
 			int width = items[kind].width;
 			if (!width)
 				continue;
-			if (drawn++)
+			if (drawn++ && c->separators)
 				box(&child, id+2+j, (cui_rect){x-GroupGap/2-1, item_y+8, 1, height-16},
 				    0, outline, transparent, 0, 0);
 			cui_rect item = {x, item_y, width, height};
 			if (inside(item, child.hover_x, child.hover_y) &&
-			    kind != BarTags && kind != BarLayout && kind != BarDate && kind != BarTime && kind != BarTray)
+			    kind != BarTags && kind != BarDate && kind != BarTime && kind != BarTray)
 				box(&child, id+16+j, (cui_rect){x-2, item_y+3, width+4, height-6}, radius,
 				    blend(bg, c->palette[SchemeStatus][ColFg], 0.08f), transparent, 0, 0);
 			if (sliding && kind >= BarCpu && kind <= BarLoad)
@@ -1350,10 +1348,15 @@ shell_tooltip_draw(const ShellHost *host, const ShellFont *font, unsigned revisi
 	Frame f = {.font = font, .config = c, .composite = host->composited, .size = size};
 	int pad = host->composited && c->shadows && c->shadow_opacity ? 4*c->bar_shadow_blur : 0;
 	int row = ceilf(size) + 8;
-	const char *example = reading && !reading->available ? "Unavailable" : "100%";
+	const char *example = reading && !reading->available ? "Unavailable"
+	                      : reading && reading->muted ? "Muted" : "100%";
 	int width = load ? 13*size : textwidth(&f, name, size, medium) +
 	            textwidth(&f, example, size, mono) + 2*padding + 14;
-	int height = (load ? 3*row : row) + 12;
+	if (!reading)
+		width = MAX(width, textwidth(&f, "Update interval", size-2, regular) +
+		            textwidth(&f, "60000 ms", size-2, mono) + 2*padding + 14);
+	int rows = load ? 3 : 1;
+	int height = (rows + !reading)*row + 12;
 	int w = width + 2*pad, h = height + 2*pad;
 	if (w > monitor.w || h + anchor.h + gap > monitor.h) {
 		shell_tooltip_hide(host, tip);
@@ -1409,8 +1412,10 @@ shell_tooltip_draw(const ShellHost *host, const ShellFont *font, unsigned revisi
 	} else if (reading) {
 		char text[20] = "Unavailable";
 		int value = kind == ControlBattery ? reading->level : controls_value(controls, kind);
-		if (reading->available)
-			snprintf(text, sizeof text, "%d%%", reading->muted ? 0 : value);
+		if (reading->muted)
+			snprintf(text, sizeof text, "Muted");
+		else if (reading->available)
+			snprintf(text, sizeof text, "%d%%", value);
 		label(&f, 3, (cui_rect){pad+padding, pad+6, inner, row}, text,
 		      reading->available ? control_color(c, kind, value, accent) : muted, size, mono, CUI_ALIGN_END);
 	} else {
@@ -1420,6 +1425,13 @@ shell_tooltip_draw(const ShellHost *host, const ShellFont *font, unsigned revisi
 			snprintf(text, sizeof text, "%d%%", (int)round(latest->value));
 		label(&f, 3, (cui_rect){pad+padding, pad+6, inner, row}, text,
 		      latest ? usage_color(c, accent, latest->value) : muted, size, mono, CUI_ALIGN_END);
+	}
+	if (!reading) {
+		char interval[24];
+		snprintf(interval, sizeof interval, "%d ms", system->interval);
+		cui_rect footer = {pad+padding, pad+6+rows*row, inner, row};
+		label(&f, 12, footer, "Update interval", muted, size-2, regular, CUI_ALIGN_START);
+		label(&f, 13, footer, interval, accent, size-2, mono, CUI_ALIGN_END);
 	}
 	if (render(host, &tip->surface)) {
 		shape(host, &tip->surface, tip->win, w, h, &body, 1, c->panelradius, pad, 0, 0, h);

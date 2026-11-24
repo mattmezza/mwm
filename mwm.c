@@ -143,6 +143,13 @@ typedef struct {
 	RestartMonitor monitors[MaxMonitors];
 } RestartState;
 
+typedef struct {
+	int interval, configured_interval, brightness_restore;
+	char backlight_device[sizeof ((Config *)0)->backlight_device];
+	size_t title_bytes;
+	Time clipboard_time;
+} RestartBarControls;
+
 /* function declarations */
 static void applyrules(Client *c);
 static int applysizehints(Client *c, int *x, int *y, int *w, int *h, int interact);
@@ -152,6 +159,7 @@ static void attach(Client *c);
 static void attachafter(Client *c, Client *after);
 static void attachstack(Client *c);
 static void buttonpress(XEvent *e);
+static void copytitle(const Client *c, Time when);
 static void checkotherwm(void);
 static void cleanup(void);
 static void clearround(Window w);
@@ -209,6 +217,8 @@ static void removesystrayicon(Client *i);
 static void resize(Client *c, int x, int y, int w, int h, int interact);
 static void resizeclient(Client *c, int x, int y, int w, int h);
 static void resizerequest(XEvent *e);
+static void selectionclear(XEvent *e);
+static void selectionrequest(XEvent *e);
 static void restack(Monitor *m);
 static void maskroundrect(Pixmap mask, GC g, int x, int y, int w, int h, int rad);
 static void roundwin(Window win, int w, int h, int rad, int bw);
@@ -300,9 +310,14 @@ static void (*handler[LASTEvent]) (XEvent *) = {
 	[MotionNotify] = motionnotify,
 	[PropertyNotify] = propertynotify,
 	[ResizeRequest] = resizerequest,
+	[SelectionClear] = selectionclear,
+	[SelectionRequest] = selectionrequest,
 	[UnmapNotify] = unmapnotify,
 };
 static Atom wmatom[WMLast], netatom[NetLast], xatom[XLast], mwmatom[MwmLast], xa_utf8;
+static Atom clipboard, selection_targets, selection_timestamp;
+static char *clipboard_title;
+static Time clipboard_time;
 static int running = 1;
 static int shapeext = 0, shapeevbase = 0;
 static Cursor cursor[CurLast];
@@ -1693,7 +1708,7 @@ paintbar(Monitor *m, time_t now, double tick)
 	                    m->barwin, &state, &timer, now, tick))
 		return;
 	m->barmapped = 1;
-	if (tooltip.mapped && shell_bar_metric(&m->bar) != MetricNone)
+	if (tooltip.mapped && shell_bar_metric(&m->bar, m->bar.hover_x, m->bar.hover_y) != MetricNone)
 		tooltip.dirty = 1;
 	if (owns_tray) {
 		int x = m->mx + m->bar.tray_x;
@@ -1734,6 +1749,54 @@ updatebarpos(Monitor *m)
 }
 
 /* ---- events ---------------------------------------------------------- */
+
+static void
+adjust_system_interval(int faster)
+{
+	static const int intervals[] = {SYSTEM_INTERVAL_MIN, 250, 500, 1000, 2000, 3000, 4000, SYSTEM_INTERVAL_MAX};
+	int count = LENGTH(intervals);
+	int previous = system_stats.interval;
+	int next = faster ? SYSTEM_INTERVAL_MIN : SYSTEM_INTERVAL_MAX;
+	for (int i = 0; i < count; ++i) {
+		int interval = intervals[faster ? count-1-i : i];
+		if ((faster && interval < previous) || (!faster && interval > previous)) {
+			next = interval;
+			break;
+		}
+	}
+	if (next != previous) {
+		system_stats.interval = next;
+		if (system_next)
+			system_next += (next - previous) / 1000.0;
+		tooltip.dirty = 1;
+	}
+}
+
+static int
+bar_adjust(const Monitor *m, ShellHit hit, int x, int y, unsigned button, Time when)
+{
+	int control = shell_panel_control(hit.action);
+	if (button == Button3 && hit.action == ActPalette && m->sel) {
+		copytitle(m->sel, when);
+		return 1;
+	}
+	if (button == Button3 && (control == ControlVolume || control == ControlBrightness)) {
+		controls_toggle(&controls, control);
+		return 1;
+	}
+	if (button != Button4 && button != Button5)
+		return 0;
+	if (control >= 0) {
+		adjust_control(control, button == Button4 ? 1 : -1);
+		return 1;
+	}
+	int metric = shell_bar_metric(&m->bar, x, y);
+	if (metric >= UsageCpu && metric <= MetricLoad) {
+		adjust_system_interval(button == Button4);
+		return 1;
+	}
+	return 0;
+}
 
 void
 buttonpress(XEvent *e)
@@ -1782,14 +1845,13 @@ buttonpress(XEvent *e)
 	if (m && ev->window == m->barwin && barvisible) {
 		ShellHit hit = shell_hit(m->bar.hits, m->bar.nhits, ev->x, ev->y);
 		selmon = m;
-		int control = shell_panel_control(hit.action);
-		if (control >= 0 && (ev->button == Button4 || ev->button == Button5)) {
-			adjust_control(control, ev->button == Button4 ? 1 : -1);
-		} else if ((ev->button == Button4 || ev->button == Button5) &&
-		    (hit.action == ActTag || hit.action == ActLayout)) {
+		if (bar_adjust(m, hit, ev->x, ev->y, ev->button, ev->time))
+			return;
+		if ((ev->button == Button4 || ev->button == Button5) && hit.action == ActTag) {
 			viewtag(ev->button == Button4 ? "prev" : "next");
-		} else if (hit.action == ActLayout && (ev->button == Button1 || ev->button == Button3)) {
-			setlayout(ev->button == Button3 ? "prev" : "next");
+		} else if (hit.action == ActLayout && (ev->button == Button1 || ev->button == Button3 ||
+		                                   ev->button == Button4 || ev->button == Button5)) {
+			setlayout(ev->button == Button3 || ev->button == Button4 ? "prev" : "next");
 		} else if (hit.action == ActTag && ev->button == Button1) {
 			char tag[16];
 			snprintf(tag, sizeof tag, "%d", (int)hit.value + 1);
@@ -2292,6 +2354,14 @@ dispatchcmd(int argc, char **argv, char *reply, size_t rsz)
 	} else if (EQ(verb, "kill")) {
 		killfocused();
 	} else if (EQ(verb, "palette")) {
+		if (argc == 2 && EQ(noun, "toggle") && panel.win && panel.kind == ActPalette) {
+			shell_panel_close(&shell, &panel);
+			return;
+		}
+		if (argc != 1 && !(argc == 2 && EQ(noun, "toggle"))) {
+			snprintf(reply, rsz, "error: palette [toggle]");
+			return;
+		}
 		if (!panel.win || panel.kind != ActPalette)
 			openpanel(selmon, ActPalette, 0, CurrentTime);
 		if (!panel.win || panel.kind != ActPalette) {
@@ -2365,7 +2435,7 @@ dispatchcmd(int argc, char **argv, char *reply, size_t rsz)
 		    "  win close | win tag <name> | win toggle float|full|sticky\n"
 		    "  win move <dx> <dy> | win resize <dw> <dh> | win center\n"
 		    "  query tags|windows|monitors|layout|state\n"
-		    "  palette | reload (config.ini + Xresources) | restart | quit | version\n"
+		    "  palette [toggle] | reload (config.ini + Xresources) | restart | quit | version\n"
 		    "  completions bash|zsh (mwmc client-side; print shell completion)\n");
 		return;
 	} else {
@@ -2907,34 +2977,125 @@ valid_utf8(const unsigned char *s, size_t size)
 	return 1;
 }
 
-int
-gettextprop(Window w, Atom atom, char *text, unsigned int size)
+static void
+textprop_utf8(XTextProperty *name, char *text, size_t size)
 {
 	char **list = NULL;
 	int n;
-	XTextProperty name = {0};
-
-	if (!text || size == 0)
-		return 0;
 	text[0] = 0;
-	if (XGetTextProperty(dpy, w, &name, atom) && name.nitems) {
-		/* Root status tools commonly write UTF-8 bytes with XStoreName. */
-		if (name.encoding == XA_STRING && !valid_utf8(name.value, name.nitems))
-			latin1_utf8(text, size, (char *)name.value, name.nitems);
-		else if (name.encoding == XA_STRING || name.encoding == xa_utf8) {
-			size_t length = MIN(name.nitems, size - 1);
-			while (length && length < name.nitems && (name.value[length] & 0xc0) == 0x80)
-				--length;
-			snprintf(text, size, "%.*s", (int)length, (char *)name.value);
-		} else if (Xutf8TextPropertyToTextList(dpy, &name, &list, &n) >= Success && n > 0) {
-			snprintf(text, size, "%s", *list);
-		}
+	if (!name->nitems || name->format != 8)
+		return;
+	/* Root status tools commonly write UTF-8 bytes with XStoreName. */
+	if (name->encoding == XA_STRING && !valid_utf8(name->value, name->nitems))
+		latin1_utf8(text, size, (char *)name->value, name->nitems);
+	else if (name->encoding == XA_STRING || name->encoding == xa_utf8) {
+		size_t length = MIN(name->nitems, size - 1);
+		while (length && length < name->nitems && (name->value[length] & 0xc0) == 0x80)
+			--length;
+		memcpy(text, name->value, length);
+		text[length] = 0;
+	} else if (Xutf8TextPropertyToTextList(dpy, name, &list, &n) >= Success && n > 0) {
+		snprintf(text, size, "%s", *list);
 	}
 	if (list)
 		XFreeStringList(list);
+}
+
+int
+gettextprop(Window w, Atom atom, char *text, unsigned int size)
+{
+	if (!text || size == 0)
+		return 0;
+	XTextProperty name = {0};
+	XGetTextProperty(dpy, w, &name, atom);
+	textprop_utf8(&name, text, size);
 	if (name.value)
 		XFree(name.value);
 	return text[0] != 0;
+}
+
+static void
+copytitle(const Client *c, Time when)
+{
+	Atom names[] = {netatom[NetWMName], XA_WM_NAME};
+	char *copy = NULL;
+	for (size_t i = 0; i < LENGTH(names); ++i) {
+		XTextProperty title = {0};
+		if (XGetTextProperty(dpy, c->win, &title, names[i]) && title.nitems
+		    && title.nitems <= (SIZE_MAX - 1) / 4) {
+			size_t capacity = title.nitems * 4 + 1;
+			copy = ecalloc(capacity, 1);
+			textprop_utf8(&title, copy, capacity);
+		}
+		if (title.value)
+			XFree(title.value);
+		if (copy && *copy)
+			break;
+		free(copy);
+		copy = NULL;
+	}
+	if (!copy)
+		return;
+	XSetSelectionOwner(dpy, clipboard, wmcheckwin, when);
+	if (XGetSelectionOwner(dpy, clipboard) != wmcheckwin) {
+		free(copy);
+		return;
+	}
+	free(clipboard_title);
+	clipboard_title = copy;
+	clipboard_time = when;
+}
+
+static void
+selectionclear(XEvent *event)
+{
+	if (event->xselectionclear.selection == clipboard && XGetSelectionOwner(dpy, clipboard) != wmcheckwin) {
+		free(clipboard_title);
+		clipboard_title = NULL;
+	}
+}
+
+static void
+selectionrequest(XEvent *event)
+{
+	XSelectionRequestEvent *request = &event->xselectionrequest;
+	XEvent reply = {.xselection = {
+		.type = SelectionNotify, .display = dpy, .requestor = request->requestor,
+		.selection = request->selection, .target = request->target, .time = request->time,
+	}};
+	Atom property = request->property != None ? request->property : request->target;
+	if (clipboard_title && request->selection == clipboard && request->owner == wmcheckwin) {
+		if (request->target == selection_targets) {
+			Atom targets[] = {selection_targets, selection_timestamp, xa_utf8, XA_STRING};
+			XChangeProperty(dpy, request->requestor, property, XA_ATOM, 32, PropModeReplace,
+			                (unsigned char *)targets, LENGTH(targets));
+			reply.xselection.property = property;
+		} else if (request->target == selection_timestamp) {
+			XChangeProperty(dpy, request->requestor, property, XA_INTEGER, 32, PropModeReplace,
+			                (unsigned char *)&clipboard_time, 1);
+			reply.xselection.property = property;
+		} else if (request->target == xa_utf8 || request->target == XA_STRING) {
+			XTextProperty encoded = {0};
+			const unsigned char *bytes = (unsigned char *)clipboard_title;
+			size_t length = strlen(clipboard_title);
+			if (request->target == XA_STRING &&
+			    Xutf8TextListToTextProperty(dpy, &clipboard_title, 1, XStringStyle, &encoded) >= Success) {
+				bytes = encoded.value;
+				length = encoded.nitems;
+			}
+			if (request->target == xa_utf8 || encoded.value) {
+				size_t chunk = 4 * (XMaxRequestSize(dpy) - 6);
+				for (size_t offset = 0; offset < length || offset == 0; offset += chunk)
+					XChangeProperty(dpy, request->requestor, property, request->target, 8,
+					                offset ? PropModeAppend : PropModeReplace,
+					                bytes + offset, MIN(chunk, length - offset));
+				reply.xselection.property = property;
+			}
+			if (encoded.value)
+				XFree(encoded.value);
+		}
+	}
+	XSendEvent(dpy, request->requestor, False, NoEventMask, &reply);
 }
 
 Client *
@@ -3292,12 +3453,18 @@ applystyle(const Config *next)
 	else if (strcmp(settings.audio_sink, next->audio_sink) ||
 	         strcmp(settings.battery_device, next->battery_device) ||
 	         strcmp(settings.backlight_device, next->backlight_device) ||
-	         settings.brightness_min != next->brightness_min)
+	         settings.brightness_min != next->brightness_min) {
+		int restore = controls.reading[ControlBrightness].brightness_restore;
 		controls_reset(&controls);
+		if (!strcmp(settings.backlight_device, next->backlight_device))
+			controls.reading[ControlBrightness].brightness_restore = restore;
+	}
 	shell_font_free(&shellfont);
 	shellfont = font;
-	if (settings.cpu_interval != next->cpu_interval)
+	if (first || settings.cpu_interval != next->cpu_interval) {
+		system_stats.interval = next->cpu_interval;
 		system_next = 0;
+	}
 	settings = *next;
 	++theme_revision;
 	lrpad = 2 * MAX(5, settings.barpadx);
@@ -3409,6 +3576,9 @@ setup(const RestartState *state)
 	/* atoms */
 	utf8string = XInternAtom(dpy, "UTF8_STRING", False);
 	xa_utf8 = utf8string;
+	clipboard = XInternAtom(dpy, "CLIPBOARD", False);
+	selection_targets = XInternAtom(dpy, "TARGETS", False);
+	selection_timestamp = XInternAtom(dpy, "TIMESTAMP", False);
 	wmatom[WMProtocols] = XInternAtom(dpy, "WM_PROTOCOLS", False);
 	wmatom[WMDelete] = XInternAtom(dpy, "WM_DELETE_WINDOW", False);
 	wmatom[WMState] = XInternAtom(dpy, "WM_STATE", False);
@@ -3517,6 +3687,7 @@ cleanup(void)
 	shell_icons_free();
 	shell_font_free(&shellfont);
 	XDestroyWindow(dpy, wmcheckwin);
+	free(clipboard_title);
 	XSync(dpy, False);
 	XSetInputFocus(dpy, PointerRoot, RevertToPointerRoot, CurrentTime);
 	XDeleteProperty(dpy, root, netatom[NetActiveWindow]);
@@ -3621,6 +3792,18 @@ save_session(FILE *file, Window requestor)
 		if (hidden_segments & (1u << i))
 			strcpy(hidden[i], settings.segments[i].name);
 	if (fwrite(hidden, sizeof hidden, 1, file) != 1)
+		return 0;
+	RestartBarControls bar_controls = {
+		.interval = system_stats.interval, .configured_interval = settings.cpu_interval,
+		.brightness_restore = controls.reading[ControlBrightness].brightness_restore,
+	};
+	strcpy(bar_controls.backlight_device, settings.backlight_device);
+	if (clipboard_title && XGetSelectionOwner(dpy, clipboard) == wmcheckwin) {
+		bar_controls.title_bytes = strlen(clipboard_title) + 1;
+		bar_controls.clipboard_time = clipboard_time;
+	}
+	if (fwrite(&bar_controls, sizeof bar_controls, 1, file) != 1 ||
+	    (bar_controls.title_bytes && fwrite(clipboard_title, bar_controls.title_bytes, 1, file) != 1))
 		return 0;
 	return fflush(file) == 0 && fseek(file, 0, SEEK_SET) == 0;
 }
@@ -3791,16 +3974,42 @@ resume_session(FILE *file, const RestartState *state)
 	bytes = fread(hidden, 1, sizeof hidden, file);
 	if (ferror(file) || (bytes && bytes != sizeof hidden))
 		die("mwm: incomplete segment state");
+	RestartBarControls bar_controls = {0};
+	bytes = fread(&bar_controls, 1, sizeof bar_controls, file);
+	if (ferror(file) || (bytes && bytes != sizeof bar_controls))
+		die("mwm: incomplete bar control state");
+	char *title = NULL;
+	if (bar_controls.title_bytes) {
+		title = ecalloc(bar_controls.title_bytes, 1);
+		if (fread(title, bar_controls.title_bytes, 1, file) != 1 || title[bar_controls.title_bytes-1])
+			die("mwm: incomplete clipboard state");
+	}
 	fclose(file);
 
 	/* Retire the previous resources under one grab. The server reparents and
 	 * maps the old tray's save-set windows before we redirect new map requests. */
 	XGrabServer(dpy);
+	int restore_clipboard = title && XGetSelectionOwner(dpy, XInternAtom(dpy, "CLIPBOARD", False)) == state->checkwin;
 	XKillClient(dpy, state->checkwin);
 	XSync(dpy, False);
 	close(state->display_fd);
 	checkotherwm();
 	setup(state);
+	if (restore_clipboard) {
+		XSetSelectionOwner(dpy, clipboard, wmcheckwin, bar_controls.clipboard_time);
+		if (XGetSelectionOwner(dpy, clipboard) == wmcheckwin) {
+			clipboard_title = title;
+			clipboard_time = bar_controls.clipboard_time;
+			title = NULL;
+		}
+	}
+	free(title);
+	if (bar_controls.configured_interval == settings.cpu_interval &&
+	    bar_controls.interval >= SYSTEM_INTERVAL_MIN && bar_controls.interval <= SYSTEM_INTERVAL_MAX)
+		system_stats.interval = bar_controls.interval;
+	bar_controls.backlight_device[sizeof bar_controls.backlight_device-1] = 0;
+	if (!strcmp(bar_controls.backlight_device, settings.backlight_device))
+		controls.reading[ControlBrightness].brightness_restore = bar_controls.brightness_restore;
 	for (int i = 0; i < MAX_BAR_SEGMENTS; ++i) {
 		hidden[i][SEGMENT_NAME-1] = 0;
 		int index = config_segment(&settings, hidden[i]);
@@ -4064,6 +4273,8 @@ static void
 adjust_control(int kind, int direction)
 {
 	int value = controls_value(&controls, kind);
+	if (kind == ControlBrightness && !value && direction < 0)
+		return;
 	set_control(kind, value + direction * controls_step(&settings, kind));
 }
 
@@ -4075,6 +4286,12 @@ panel_key(XKeyEvent *event)
 	int raw = XLookupString(event, latin1, sizeof latin1, &key, NULL);
 	size_t n = latin1_utf8(bytes, sizeof bytes, latin1, raw > 0 ? raw : 0);
 	if (key == XK_Escape) {
+		shell_panel_close(&shell, &panel);
+		return;
+	}
+	/* The palette owns the keyboard grab while open, so sxhkd cannot close it. */
+	if (panel.kind == ActPalette && key == XK_space &&
+	    (event->state & (Mod4Mask | ControlMask | ShiftMask | Mod1Mask)) == (Mod4Mask | ControlMask)) {
 		shell_panel_close(&shell, &panel);
 		return;
 	}
@@ -4173,13 +4390,17 @@ panel_event(XEvent *e)
 		for (Monitor *m = mons; m; m = m->next) {
 			if (!barvisible || click->y_root < m->by || click->y_root >= m->by + bh)
 				continue;
-			ShellHit hit = shell_hit(m->bar.hits, m->bar.nhits, click->x_root-m->mx, click->y_root-m->by);
-			int hit_control = shell_panel_control(hit.action);
-			if (hit_control >= 0 && (click->button == Button4 || click->button == Button5))
-				adjust_control(hit_control, click->button == Button4 ? 1 : -1);
+			int x = click->x_root - m->mx, y = click->y_root - m->by;
+			ShellHit hit = shell_hit(m->bar.hits, m->bar.nhits, x, y);
+			if (bar_adjust(m, hit, x, y, click->button, click->time))
+				break;
 			if (click->button == Button1 && hit.action != was && panel_action(hit.action))
 				openpanel(m, hit.action, m->mx + hit.rect.x + hit.rect.w / 2, click->time);
 		}
+		return;
+	}
+	if (click->button == Button3 && (control == ControlVolume || control == ControlBrightness)) {
+		controls_toggle(&controls, control);
 		return;
 	}
 	if (click->button == Button4 || click->button == Button5) {
@@ -4271,7 +4492,7 @@ static void
 sample_system(double tick)
 {
 	int reset = !system_next;
-	system_next = tick + settings.cpu_interval / 1000.0;
+	system_next = tick + system_stats.interval / 1000.0;
 	double values[] = {[UsageCpu] = sample_cpu(reset), [UsageRam] = sample_ram()};
 	double load[LoadPeriods];
 	long cpus = sysconf(_SC_NPROCESSORS_ONLN);
@@ -4312,7 +4533,7 @@ system_tooltip_tick(double tick)
 	int metric = MetricNone;
 	if (barvisible && bar_level == 1 && !panel.win && settings.tooltip_delay >= 0)
 		for (m = mons; m; m = m->next) {
-			metric = shell_bar_metric(&m->bar);
+			metric = shell_bar_metric(&m->bar, m->bar.hover_x, m->bar.hover_y);
 			if (metric != MetricNone)
 				break;
 		}

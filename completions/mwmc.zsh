@@ -28,7 +28,7 @@ _mwmc() {
             'segment:list or change the visibility of a bar segment'
             'win:act on the focused window'
             'query:print machine-readable state'
-            'palette:open the searchable command palette'
+            'palette:open or toggle the searchable command palette'
             'reload:re-read config.ini and Xresources live'
             'restart:replace mwm in place and restore the session'
             'quit:ask mwm to exit'
@@ -77,6 +77,7 @@ _mwmc() {
             3) [[ $words[2] == toggle ]] && _values 'state' float full sticky ;;
             esac ;;
         query)   (( CURRENT == 2 )) && _values 'query' tags windows monitors layout state ;;
+        palette) (( CURRENT == 2 )) && _values 'action' toggle ;;
         completions) (( CURRENT == 2 )) && _values 'shell' bash zsh ;;
         esac ;;
     esac
