@@ -41,6 +41,12 @@ typedef struct {
 } ShellHit;
 
 typedef struct {
+	float from, level;
+	int shown;
+	double started;
+} ShellReveal;
+
+typedef struct {
 	ShellSurface surface;
 	ShellHit hits[MAX_TAGS + 5];
 	int nhits;
@@ -51,6 +57,9 @@ typedef struct {
 	float selected_x, selected_w, from_x, from_w;
 	double transition, last_frame;
 	int animating;
+	ShellReveal tray_reveal, status_reveal, title_reveal;
+	int tray_width;
+	char status[512], title[256];
 } ShellBar;
 
 typedef struct {
@@ -59,7 +68,7 @@ typedef struct {
 } ShellTag;
 
 typedef struct {
-	int w, h, pad, tray_width;
+	int w, h, pad, tray_width, tray_shown;
 	int tag, ntags, layout;
 	ShellTag tags[MAX_TAGS];
 	const char *title, *status;

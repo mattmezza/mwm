@@ -228,6 +228,9 @@ The profile also shows how to apply a panel shader with GLX.
 
 The XEmbed tray uses the bar's status colors and follows the focused monitor.
 Set `systraymon` in `[tray]` to pin it to a zero-based monitor index.
+The tray, title, and status segments slide open and closed. Adjust their
+timing with `duration` in `[motion]`, or enable `reduced_motion` to switch
+between states immediately.
 
 ## Configuration
 

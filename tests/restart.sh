@@ -77,7 +77,10 @@ done
 xwininfo -id "$(cat "$dir/first")" | diff -u "$dir/geometry" -
 xwininfo -id "$(cat "$dir/icon")" | grep 'IsUnviewable'
 "$control" traybar show
-xwininfo -id "$(cat "$dir/icon")" | grep 'IsViewable'
+tray_viewable() {
+    xwininfo -id "$(cat "$dir/icon")" | grep -q 'IsViewable'
+}
+eventually tray_viewable
 "$control" win toggle full
 "$control" query windows | grep -F 'float=1 full=0 sticky=0 focused=1 "second"'
 

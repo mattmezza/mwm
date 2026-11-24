@@ -109,7 +109,7 @@ typedef struct {
 typedef struct Systray {
 	Window win;
 	Client *icons;
-	int monitor;
+	int monitor, width, height, clip_width, mapped;
 	unsigned long bg;
 } Systray;
 
@@ -179,7 +179,6 @@ static void focusstack(int dir);
 static Atom getatomprop(Client *c, Atom prop);
 static int getrootptr(int *x, int *y);
 static long getstate(Window w);
-static unsigned int getsystraywidth(void);
 static int gettextprop(Window w, Atom atom, char *text, unsigned int size);
 static void grabbuttons(Client *c, int focused);
 static void handleipc(Window requestor);
@@ -247,6 +246,7 @@ static int updategeom(int initial);
 static void updatesizehints(Client *c);
 static void updatestatus(void);
 static void updatesystray(void);
+static void painttray(int segment_width);
 static void updatesystrayicongeom(Client *i, int w, int h);
 static void updatesystrayiconstate(Client *i, XPropertyEvent *ev);
 static void updatetitle(Client *c);
@@ -1621,10 +1621,12 @@ paintbar(Monitor *m, time_t now, double tick)
 	m->bardirty = 0;
 	if (!barvisible)
 		return;
+	int owns_tray = systray && systray->monitor == m->num;
+	int tray_width = owns_tray && systray->width ? systray->width + 2*(lrpad / 2) : 0;
 	ShellBarModel state = {
 		.w = m->mw, .h = bh,
 		.pad = shell_bar_inset(&settings),
-		.tray_width = m == traymonitor() ? getsystraywidth() : 0,
+		.tray_width = tray_width, .tray_shown = tray_width && systrayvisible && settings.showsystray,
 		.tag = m->seltag, .layout = m->seltag < 0 ? -1 : tagstate[m->seltag].layout,
 		.title = m->sel ? m->sel->name : "", .status = stext,
 	};
@@ -1643,6 +1645,8 @@ paintbar(Monitor *m, time_t now, double tick)
 	}
 	shell_bar_draw(&shell, &shellfont, theme_revision, &settings, &m->bar,
 	               m->barwin, &state, &timer, now, tick);
+	if (owns_tray)
+		painttray(m->bar.tray_width);
 }
 
 void
@@ -2476,23 +2480,31 @@ updateclientlist(void)
 
 /* ---- system tray ----------------------------------------------------- */
 
-unsigned int
-getsystraywidth(void)
+/* Clip the XEmbed strip with the right-anchored segment as it opens or closes.
+ * Only its container is unmapped. The icon windows stay docked and mapped. */
+static void
+painttray(int segment_width)
 {
-	unsigned int w = 0;
-	int n = 0;
-	Client *i;
-
-	if (!settings.showsystray || !systray || !systrayvisible || !barvisible)
-		return 0;
-	for (i = systray->icons; i; i = i->next) {
-		w += i->w + settings.systrayspacing;
-		n++;
+	int visible = MIN(systray->width, MAX(0, segment_width - lrpad/2));
+	if (!visible) {
+		if (systray->mapped)
+			XUnmapWindow(dpy, systray->win);
+		systray->mapped = 0;
+		return;
 	}
-	if (n == 0)
-		return 0;
-	/* Icon block plus the bar segment's horizontal padding. */
-	return w - settings.systrayspacing + 2 * (lrpad / 2);
+	if (shapeext && visible != systray->clip_width) {
+		if (visible == systray->width)
+			XShapeCombineMask(dpy, systray->win, ShapeBounding, 0, 0, None, ShapeSet);
+		else {
+			XRectangle clip = {systray->width - visible, 0, visible, systray->height};
+			XShapeCombineRectangles(dpy, systray->win, ShapeBounding, 0, 0, &clip, 1, ShapeSet, Unsorted);
+		}
+		systray->clip_width = visible;
+	}
+	if (!systray->mapped) {
+		XMapRaised(dpy, systray->win);
+		systray->mapped = 1;
+	}
 }
 
 void
@@ -2588,8 +2600,7 @@ updatesystray(void)
 	XSetWindowAttributes wa;
 	Client *i;
 	Monitor *m = NULL;
-	int x;
-	unsigned int w;
+	int w = 0;
 
 	if (!settings.showsystray && !systray)
 		return;
@@ -2642,38 +2653,31 @@ updatesystray(void)
 		drawbars();
 	}
 
-	/* tray hidden via `mwmc traybar toggle`: unmap ONLY the container window.
-	 * The icons are reparented children of it, so they vanish with it but stay
-	 * mapped in their own right — do NOT unmap them individually, or the
-	 * resulting UnmapNotify makes unmapnotify() call removesystrayicon() and the
-	 * icons are gone for good (they never reappear on show). We keep owning the
-	 * tray selection while hidden so new icons still dock. */
-	if (!systrayvisible || !barvisible || !settings.showsystray) {
-		XUnmapWindow(dpy, systray->win);
-		return;
-	}
-
-	w = 0;
 	for (i = systray->icons; i; i = i->next) {
 		XMoveResizeWindow(dpy, i->win, w, 0, i->w, i->h);
 		XMapWindow(dpy, i->win);
 		w += i->w + settings.systrayspacing;
 	}
 	w = w ? w - settings.systrayspacing : 0;
-	if (w == 0) {
-		/* nothing docked: park the tray window off to the side */
-		XUnmapWindow(dpy, systray->win);
-		XMoveResizeWindow(dpy, systray->win, m->mx + m->mw, m->by, 1, bh);
-	} else {
-		int inset = shell_bar_inset(&settings) + settings.systrayvertpad;
-		x = m->mx + m->mw - MIN(settings.barmargin, m->mw / 8) - lrpad / 2 - w;
-		XMoveResizeWindow(dpy, systray->win, x, m->by + inset, w, MAX(1, bh - 2*inset));
-		if (systray->bg != traybg) {
-			XSetWindowBackground(dpy, systray->win, traybg);
-			XClearWindow(dpy, systray->win);
-			systray->bg = traybg;
-		}
-		XMapRaised(dpy, systray->win);
+	int inset = shell_bar_inset(&settings) + settings.systrayvertpad;
+	int height = MAX(1, bh - 2*inset);
+	if (systray->width != w || systray->height != height)
+		systray->clip_width = -1;
+	systray->width = w;
+	systray->height = height;
+	if (systray->bg != traybg) {
+		XSetWindowBackground(dpy, systray->win, traybg);
+		XClearWindow(dpy, systray->win);
+		systray->bg = traybg;
+	}
+	if (!w || !barvisible || !settings.showsystray)
+		painttray(0);
+	else {
+		int x = m->mx + m->mw - MIN(settings.barmargin, m->mw / 8) - lrpad / 2 - w;
+		XMoveResizeWindow(dpy, systray->win, x, m->by + inset, w, height);
+		painttray(m->bar.tray_width);
+		if (systray->mapped)
+			XRaiseWindow(dpy, systray->win);
 	}
 	XSync(dpy, False);
 }

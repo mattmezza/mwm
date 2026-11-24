@@ -225,7 +225,7 @@ channel(unsigned char value, unsigned long mask)
 }
 
 static int
-present(const ShellHost *host, ShellSurface *surface, Window window)
+render(const ShellHost *host, ShellSurface *surface)
 {
 	cui_end_box(surface->ui);
 	cui_draw_list list = cui_end_frame(surface->ui);
@@ -262,8 +262,14 @@ present(const ShellHost *host, ShellSurface *surface, Window window)
 			}
 		}
 	}
-	XPutImage(host->dpy, window, surface->gc, image, 0, 0, 0, 0, w, h);
 	return 1;
+}
+
+static void
+blit(const ShellHost *host, const ShellSurface *surface, Window window)
+{
+	XPutImage(host->dpy, window, surface->gc, surface->image, 0, 0, 0, 0,
+	          surface->image->width, surface->image->height);
 }
 
 int
@@ -594,6 +600,35 @@ bar_clock(Frame *f, cui_rect r, const char *text, enum ShellAction action, int i
 	hit(f, r, action, 0);
 }
 
+static float
+reveal(ShellBar *bar, ShellReveal *state, int shown, double tick, int duration)
+{
+	if (!duration || !bar->last_frame) {
+		*state = (ShellReveal){.level = shown, .shown = shown};
+		return shown;
+	}
+	if (state->shown != shown) {
+		state->from = state->level;
+		state->shown = shown;
+		state->started = tick;
+	}
+	if (state->started) {
+		float t = fmin(1, (tick - state->started) * 1000 / duration);
+		float eased = t*t*(3 - 2*t);
+		state->level = state->from + (shown - state->from) * eased;
+		if (t == 1)
+			state->started = 0;
+	}
+	bar->animating |= state->started != 0;
+	return state->level;
+}
+
+static void
+clip(Frame *f, int id, cui_rect r)
+{
+	cui_begin_absolute_box(f->ui, id, (cui_box){.width = r.w, .height = r.h, .clip = true}, r);
+}
+
 void
 shell_bar_draw(const ShellHost *host, const ShellFont *font, unsigned revision,
                const Config *c, ShellBar *bar, Window window, const ShellBarModel *m,
@@ -602,10 +637,21 @@ shell_bar_draw(const ShellHost *host, const ShellFont *font, unsigned revision,
 	int w = m->w, h = m->h, y = m->pad;
 	int height = h - 2*y;
 	double dt = bar->last_frame ? fmin(tick - bar->last_frame, 0.1) : 0;
-	bar->last_frame = tick;
 	if (w < 1 || height < 1
 	    || !begin(host, font, revision, &bar->surface, window, w, h, dt))
 		return;
+
+	int duration = c->reduced_motion ? 0 : c->duration;
+	bar->animating = 0;
+	int tray_duration = host->shape && m->tray_width ? duration : 0;
+	float tray = reveal(bar, &bar->tray_reveal, m->tray_shown, tick, tray_duration);
+	float status = reveal(bar, &bar->status_reveal, !!m->status[0], tick, duration);
+	float title = reveal(bar, &bar->title_reveal, !!m->title[0], tick, duration);
+	if (m->status[0])
+		snprintf(bar->status, sizeof bar->status, "%s", m->status);
+	if (m->title[0])
+		snprintf(bar->title, sizeof bar->title, "%s", m->title);
+	bar->last_frame = tick;
 
 	ShellHit hover = shell_hit(bar->hits, bar->nhits, bar->hover_x, bar->hover_y);
 	int hovered = hover.action * (MAX_TAGS + 1) + hover.value;
@@ -613,8 +659,7 @@ shell_bar_draw(const ShellHost *host, const ShellFont *font, unsigned revision,
 		bar->hovered = hovered;
 		bar->hover_since = tick;
 	}
-	float fade = c->reduced_motion || !c->duration ? 1
-	             : fminf(1, (tick - bar->hover_since) * 1000 / c->duration);
+	float fade = duration ? fminf(1, (tick - bar->hover_since) * 1000 / duration) : 1;
 	Frame f = {bar->surface.ui, font, c, bar->hits, 0, COUNT(bar->hits),
 	           bar->hover_x, bar->hover_y, host->composited, fade, font->bar_size};
 	cui_set_reduced_motion(f.ui, c->reduced_motion != 0);
@@ -628,14 +673,15 @@ shell_bar_draw(const ShellHost *host, const ShellFont *font, unsigned revision,
 	cui_color bar_bg = surface_color(&f, SchemeBar);
 
 	int margin = MIN(c->barmargin, w / 8);
-	int right = MAX(margin, w - margin - (m->tray_width ? m->tray_width + gap : 0));
+	int tray_width = roundf(MIN(m->tray_width, w - 2*margin) * tray);
+	int right = MAX(margin, w - margin - tray_width - (int)roundf(gap * tray));
 	cui_rect strip = {0, y, w, height};
 	if (bar_bg.a)
 		box(&f, 1, strip, 0, bar_bg, transparent, 0, 0);
-	if (m->tray_width) {
-		cui_rect tray = {w - margin - m->tray_width, y, m->tray_width, height};
-		shapes[n++] = tray;
-		box(&f, 2, tray, radius, alpha(status_bg, 255), outline, 1, 1);
+	if (tray_width) {
+		cui_rect r = {w - margin - tray_width, y, tray_width, height};
+		shapes[n++] = r;
+		box(&f, 2, r, radius, alpha(status_bg, 255), outline, 1, 1);
 	}
 	struct tm local;
 	char date[80] = "", clock[40] = "";
@@ -713,7 +759,7 @@ shell_bar_draw(const ShellHost *host, const ShellFont *font, unsigned revision,
 			x += tagw[i];
 		}
 		if (selected.w > 0) {
-			if (!bar->selected_w || c->reduced_motion || !c->duration) {
+			if (!bar->selected_w || !duration) {
 				bar->selected_x = bar->from_x = selected.x;
 				bar->selected_w = bar->from_w = selected.w;
 				bar->transition = 0;
@@ -722,11 +768,11 @@ shell_bar_draw(const ShellHost *host, const ShellFont *font, unsigned revision,
 				bar->from_w = bar->selected_w;
 				bar->transition = tick;
 			}
-			float t = bar->transition ? fmin(1, (tick - bar->transition) * 1000 / c->duration) : 1;
+			float t = bar->transition ? fmin(1, (tick - bar->transition) * 1000 / duration) : 1;
 			float eased = 1 - powf(1 - t, 3);
 			bar->selected_x = bar->from_x + (selected.x - bar->from_x) * eased;
 			bar->selected_w = bar->from_w + (selected.w - bar->from_w) * eased;
-			bar->animating = t < 1;
+			bar->animating |= t < 1;
 			bar->tag = m->tag;
 			float sx = fmaxf(bar->selected_x, left.x + 3);
 			float sw = fminf(bar->selected_w, left.x + left.w - 3 - sx);
@@ -734,7 +780,6 @@ shell_bar_draw(const ShellHost *host, const ShellFont *font, unsigned revision,
 			    surface_color(&f, SchemeSel), transparent, 0, 0);
 		} else {
 			bar->selected_w = 0;
-			bar->animating = 0;
 		}
 		x = margin + 4;
 		for (int i = 0; i < m->ntags; ++i) {
@@ -763,50 +808,59 @@ shell_bar_draw(const ShellHost *host, const ShellFont *font, unsigned revision,
 			button(&f, 25, r, symbols[m->layout], ActLayout, transparent, accent, 0);
 		}
 	} else {
-		bar->animating = 0;
 		bar->selected_w = 0;
 	}
 	int start = margin + leftw + (leftw ? gap : 0);
 	int end = clockx - gap;
 	int remaining = MAX(0, end - start);
-	if (m->status[0] && remaining > 60) {
-		char status[512];
+	if (status > 0 && remaining > 60) {
+		char text[512];
 		cui_text_color_span spans[64];
-		status_parse(m->status, status, spans, fg);
-		int limit = m->title[0] ? MIN(remaining / 2, w / 3) : remaining;
-		int statusw = MIN(limit, (int)textwidth(&f, status, size, mono) + 2*c->barpadx);
-		if (statusw >= 40) {
+		status_parse(bar->status, text, spans, fg);
+		int limit = title > 0 ? MIN(remaining / 2, w / 3) : remaining;
+		int full = MIN(limit, (int)textwidth(&f, text, size, mono) + 2*c->barpadx);
+		int statusw = roundf(full * status);
+		if (full >= 40 && statusw) {
 			cui_rect r = {end-statusw, y, statusw, height};
 			shapes[n++] = r;
 			box(&f, 35, r, radius, status_bg, outline, status_bg.a != 0, 1);
-			status_label(&f, (cui_rect){r.x+c->barpadx, y, r.w-2*c->barpadx, height},
-			             m->status, 36, fg);
-			end -= statusw + gap;
+			clip(&f, 37, r);
+			status_label(&f, (cui_rect){statusw-full+c->barpadx, 0, full-2*c->barpadx, height},
+			             bar->status, 36, fg);
+			cui_end_box(f.ui);
+			end -= statusw + (int)roundf(gap * status);
 		}
 	}
-	if (m->title[0] && end - start >= 54) {
-		int wanted = textwidth(&f, m->title, size, medium) + 2*c->barpadx + 22;
-		int tw = MIN(wanted, end - start);
+	int wanted = title > 0 ? textwidth(&f, bar->title, size, medium) + 2*c->barpadx + 22 : 0;
+	int full = MIN(wanted, end - start);
+	int tw = full >= 54 ? roundf(full * title) : 0;
+	if (tw) {
 		int x = c->titlealign == 2 ? end - tw : c->titlealign == 1
 		        ? MAX(start, MIN((w - tw)/2, end-tw)) : start;
 		cui_rect r = {x, y, tw, height};
 		shapes[n++] = r;
-		cui_color title = c->palette[SchemeTitle][ColFg], bg = surface_color(&f, SchemeTitle);
+		cui_color ink = c->palette[SchemeTitle][ColFg], bg = surface_color(&f, SchemeTitle);
 		if (inside(r, f.hover_x, f.hover_y))
-			bg = blend(bg, title, 0.1f * f.hover);
+			bg = blend(bg, ink, 0.1f * f.hover);
 		box(&f, 40, r, radius, bg, outline, bg.a != 0, 1);
-		glyph(&f, 41, x + 9, y + (height-17)/2, 17, ActPalette, accent);
-		label(&f, 42, (cui_rect){x+31, y, tw-31-c->barpadx, height}, m->title,
-		      title, size, medium, CUI_ALIGN_START);
-		hit(&f, r, ActPalette, 0);
+		clip(&f, 43, r);
+		glyph(&f, 41, 9, (height-17)/2, 17, ActPalette, accent);
+		label(&f, 42, (cui_rect){31, 0, full-31-c->barpadx, height}, bar->title,
+		      ink, size, medium, CUI_ALIGN_START);
+		cui_end_box(f.ui);
+		if (m->title[0])
+			hit(&f, r, ActPalette, 0);
 	}
 	bar->animating |= hovered && fade < 1;
-	if (present(host, &bar->surface, window)) {
+	if (render(host, &bar->surface)) {
+		bar->tray_width = tray_width;
 		bar->nhits = f.nhits;
 		if (bar_bg.a)
 			shape(host, &bar->surface, window, w, h, &strip, 1, 0, 0);
 		else
 			shape(host, &bar->surface, window, w, h, shapes, n, radius, host->composited ? y : 0);
+		/* Expand the drawable region before presenting newly visible pixels. */
+		blit(host, &bar->surface, window);
 	}
 }
 
@@ -1144,9 +1198,10 @@ shell_panel_draw(const ShellHost *host, const ShellFont *font, unsigned revision
 		world_clock(&f, p, timer, &local, now, tick, fg, muted, accent, ink, card, outline);
 	else
 		palette(&f, p, entries, count, fg, muted, accent, ink, card, outline);
-	if (present(host, &p->surface, p->win)) {
+	if (render(host, &p->surface)) {
 		p->nhits = f.nhits;
 		shape(host, &p->surface, p->win, w, h, &body, 1, radius, p->pad);
+		blit(host, &p->surface, p->win);
 	}
 	return t < 1;
 }
