@@ -8,18 +8,21 @@ is driven at runtime through the `mwmc` client over a pure-X11 IPC channel
 
 ## Screenshots
 
-![mwm desktop with workspace tags, a matching system tray, and terminals showing mwmc and config.ini](docs/screenshots/desktop.webp)
+![mwm desktop with workspace tags, six activity indicators, a matching tray, and terminals showing mwmc and config.ini](docs/screenshots/desktop.webp)
 
-Geist and Geist Mono with an Xresources palette and a Runware-generated Alpine wallpaper.
+Geist and Geist Mono with an Xresources palette and a Runware-generated Alpine wallpaper. Network, disk, and battery readings include demonstration data.
 
 | Calendar | World clock and timer |
 | --- | --- |
-| ![Monthly calendar with today highlighted and arrows to change month](docs/screenshots/calendar.webp) | ![World clock with local time and three time zones above a timer form](docs/screenshots/world-clock.webp) |
-| Click the date to browse months. | Click the time to see configured time zones or set an alert. |
+| ![Monthly calendar with today highlighted and month and year selectors](docs/screenshots/calendar.webp) | ![World clock with four time zones and the timer disclosure expanded to show scrollable quick links](docs/screenshots/world-clock.webp) |
+| Click the date to open the calendar. | Click the time for world clocks, then expand Timer to set an alert. |
 
-![mwm command palette with a search field and a list of open windows and tags](docs/screenshots/command-palette.webp)
+![Month and year grids with a highlighted selection and paging arrows](docs/screenshots/calendar-pickers.webp)
 
-Open the palette with `mwmc palette` to find windows, jump to tags, or switch layouts.
+| Battery | Command palette |
+| --- | --- |
+| ![Battery panel showing charge percentage, discharge estimate, and the charge limit](docs/screenshots/battery.webp) | ![mwm command palette with a search field and a list of open windows and tags](docs/screenshots/command-palette.webp) |
+| Click the battery for charge and time remaining. | Open with `mwmc palette` to find windows, jump to tags, or switch layouts. |
 
 ## Features
 
