@@ -1,8 +1,3 @@
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset=".github/mwm.png">
-  <img alt="mwm screenshot" src=".github/mwm.png">
-</picture>
-
 # mwm — matteo's window manager
 
 A deliberately small, dwm-flavoured tiling window manager for X11. Written in C with a CUI desktop shell and a reloadable INI configuration.
@@ -10,6 +5,21 @@ A deliberately small, dwm-flavoured tiling window manager for X11. Written in C 
 The one big departure from dwm: **mwm has no built-in keybindings.** Everything
 is driven at runtime through the `mwmc` client over a pure-X11 IPC channel
 (tmux style). Bind keys to `mwmc` calls with any hotkey daemon (e.g. `sxhkd`).
+
+## Screenshots
+
+![mwm desktop with workspace tags, a matching system tray, and terminals showing mwmc and config.ini](docs/screenshots/desktop.webp)
+
+Geist and Geist Mono with an Xresources palette and a Runware-generated Alpine wallpaper.
+
+| Calendar | World clock and timer |
+| --- | --- |
+| ![Monthly calendar with today highlighted and arrows to change month](docs/screenshots/calendar.webp) | ![World clock with local time and three time zones above a timer form](docs/screenshots/world-clock.webp) |
+| Click the date to browse months. | Click the time to see configured time zones or set an alert. |
+
+![mwm command palette with a search field and a list of open windows and tags](docs/screenshots/command-palette.webp)
+
+Open the palette with `mwmc palette` to find windows, jump to tags, or switch layouts.
 
 ## Features
 
