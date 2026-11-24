@@ -23,7 +23,7 @@ typedef struct {
 	int warpcursor, movemod, snap, defaultlayout, nmaster;
 	float mfact;
 	int topbar, showbar, barheight, barvertpad, barpadx, barmargin, barvmargin;
-	int barseggap, segradius, titlealign;
+	int barseggap, segradius, titlealign, barfontsize;
 	int showsystray, showtraybar, systraymon, systrayspacing, systrayvertpad;
 	int panelradius, panel_opacity, calendar_width, clock_width, palette_width;
 	int duration, reduced_motion, shadows, shadow_opacity, bar_shadow_blur, panel_shadow_blur;

@@ -1658,13 +1658,14 @@ updatebarpos(Monitor *m)
 	m->wy = m->my;
 	m->wh = m->mh;
 	if (barvisible) {
-		m->wh = MAX(1, m->wh - bh - settings.barvmargin);
+		int inset = shell_bar_inset(&settings);
+		int reserved = bh - 2*inset + settings.barvmargin;
+		m->wh = MAX(1, m->wh - reserved);
 		if (settings.topbar) {
-			m->by = m->my + settings.barvmargin;
-			m->wy = m->my + bh + settings.barvmargin;
+			m->by = m->my + settings.barvmargin - inset;
+			m->wy = m->my + reserved;
 		} else {
-			m->by = m->my + m->mh - bh - settings.barvmargin;
-			m->wy = m->my;
+			m->by = m->my + m->mh - reserved - inset;
 		}
 	} else {
 		m->by = -bh;
@@ -3178,8 +3179,8 @@ applystyle(const Config *next)
 	++theme_revision;
 	lrpad = 2 * MAX(5, settings.barpadx);
 	int inset = shell_bar_inset(&settings);
-	bh = settings.barheight ? MAX(settings.barheight, (int)font.size + 10 + 2*inset)
-	                        : (int)font.size + 2*(settings.barvertpad + inset) + 4;
+	bh = settings.barheight ? MAX(settings.barheight, (int)font.bar_size + 10 + 2*inset)
+	                        : (int)font.bar_size + 2*(settings.barvertpad + inset) + 4;
 
 	if (first)
 		return NULL;

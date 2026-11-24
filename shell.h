@@ -14,7 +14,7 @@ typedef struct {
 
 typedef struct {
 	cui_font *font;
-	float size;
+	float size, bar_size;
 	cui_font *medium, *mono;
 } ShellFont;
 

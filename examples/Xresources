@@ -18,7 +18,7 @@ mwm.selborder:       #7aa2f7
 mwm.urgfg:           #1a1b26
 mwm.urgbg:           #f7768e
 mwm.urgborder:       #f7768e
-! center title pill
+! focused title pill
 mwm.titlefg:         #c0caf5
 mwm.titlebg:         #1a1b26
 ! right status pill
@@ -40,10 +40,11 @@ mwm.barbgalpha:      0x00
 mwm.borderpx:        2
 mwm.gappx:           10
 mwm.cornerradius:    3
-mwm.segradius:       3
+mwm.segradius:       6
+mwm.barfontsize:     16
 mwm.barpadx:         12
-mwm.barvertpad:      8
-mwm.barmargin:       10
-mwm.barvmargin:      7
+mwm.barvertpad:      6
+mwm.barmargin:       6
+mwm.barvmargin:      6
 mwm.barseggap:       10
 mwm.mfact:           0.55

@@ -31,10 +31,10 @@ config_defaults(Config *c)
 		.borderpx = 2, .gappx = 8, .cornerradius = 3, .focusfollowsmouse = 1,
 		.warpcursor = 1, .movemod = Mod4Mask, .snap = 8,
 		.defaultlayout = 1, .nmaster = 1, .mfact = 0.5f,
-		.topbar = 1, .showbar = 1, .barvertpad = 8, .barpadx = 12,
-		.barmargin = 10, .barvmargin = 7, .barseggap = 10, .segradius = 3, .titlealign = 1,
+		.topbar = 1, .showbar = 1, .barvertpad = 6, .barpadx = 12,
+		.barmargin = 6, .barvmargin = 6, .barseggap = 10, .segradius = 6, .barfontsize = 16,
 		.showsystray = 1, .showtraybar = 1, .systraymon = -1, .systrayspacing = 7, .systrayvertpad = 6,
-		.panelradius = 4, .panel_opacity = 255, .calendar_width = 394, .clock_width = 448, .palette_width = 530,
+		.panelradius = 6, .panel_opacity = 255, .calendar_width = 394, .clock_width = 448, .palette_width = 530,
 		.duration = 150, .shadows = 1, .shadow_opacity = 112, .bar_shadow_blur = 2, .panel_shadow_blur = 6,
 		.font = "Geist:pixelsize=18", .monofont = "Geist Mono",
 		.colors = {
@@ -76,6 +76,7 @@ static const Setting settings[] = {
 	INT("bar", "barpadx", barpadx, 0, 32), INT("bar", "barmargin", barmargin, 0, 48),
 	INT("bar", "barvmargin", barvmargin, 0, 48), INT("bar", "barseggap", barseggap, 0, 32),
 	INT("bar", "segradius", segradius, 0, 32), INT("bar", "titlealign", titlealign, 0, 2),
+	INT("bar", "barfontsize", barfontsize, 0, 28),
 	INT("tray", "showsystray", showsystray, 0, 1), INT("tray", "showtraybar", showtraybar, 0, 1),
 	INT("tray", "systraymon", systraymon, -1, 99), INT("tray", "systrayspacing", systrayspacing, 0, 24),
 	INT("tray", "systrayvertpad", systrayvertpad, 0, 24),
@@ -141,6 +142,8 @@ setting(Config *c, const Setting *s, const char *value)
 		*(float *)dest = f;
 		return 1;
 	}
+	if (s->offset == offsetof(Config, barfontsize) && strcmp(value, "0"))
+		return integer(value, 9, 28, dest);
 	if (s->min == 0 && s->max == 1) {
 		if (!strcmp(value, "true") || !strcmp(value, "false")) {
 			*(int *)dest = !strcmp(value, "true");
