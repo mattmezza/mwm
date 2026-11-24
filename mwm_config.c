@@ -45,8 +45,10 @@ config_defaults(Config *c)
 		.battery_step = 5, .volume_step = 5, .brightness_step = 5, .brightness_min = 1,
 		.controls_width = 270, .audio_sink = "@DEFAULT_AUDIO_SINK@",
 		.showsystray = 1, .showtraybar = 1, .systraymon = -1, .systrayspacing = 7, .systrayvertpad = 6,
+		.applet_width = 386, .applet_rows = 6, .wifi_secret_agent = 1, .bluetooth_default_agent = 1,
 		.panelradius = 6, .panel_opacity = 255, .calendar_width = 394, .clock_width = 448, .palette_width = 530,
 		.duration = 150, .shadows = 1, .shadow_opacity = 112, .bar_shadow_blur = 2, .panel_shadow_blur = 6,
+		.popup_enter = 145, .popup_exit = 100, .popup_distance = 14,
 		.font = "Geist:pixelsize=18", .monofont = "Geist Mono",
 		.colors = {
 			[SchemeNorm]   = {"#c0caf5", "#1a1b26", "#3b4261"},
@@ -127,12 +129,18 @@ static const Setting settings[] = {
 	INT("tray", "showsystray", showsystray, 0, 1), INT("tray", "showtraybar", showtraybar, 0, 1),
 	INT("tray", "systraymon", systraymon, -1, 99), INT("tray", "systrayspacing", systrayspacing, 0, 24),
 	INT("tray", "systrayvertpad", systrayvertpad, 0, 24),
+	INT("applets", "width", applet_width, 280, 720), INT("applets", "rows", applet_rows, 3, 12),
+	STR("applets", "wifi_interface", wifi_interface), STR("applets", "bluetooth_adapter", bluetooth_adapter),
+	INT("applets", "wifi_secret_agent", wifi_secret_agent, 0, 1),
+	INT("applets", "bluetooth_default_agent", bluetooth_default_agent, 0, 1),
 	INT("panels", "radius", panelradius, 0, 32),
 	INT("panels", "opacity", panel_opacity, 0, 255),
 	INT("panels", "calendar_width", calendar_width, 300, 900),
 	INT("panels", "clock_width", clock_width, 340, 900),
 	INT("panels", "palette_width", palette_width, 360, 900),
 	INT("motion", "duration", duration, 0, 500), INT("motion", "reduced_motion", reduced_motion, 0, 1),
+	INT("motion", "popup_enter", popup_enter, 0, 500), INT("motion", "popup_exit", popup_exit, 0, 500),
+	INT("motion", "popup_distance", popup_distance, 0, 48),
 	INT("motion", "shadows", shadows, 0, 1),
 	INT("motion", "shadow_opacity", shadow_opacity, 0, 255),
 	INT("motion", "bar_shadow_blur", bar_shadow_blur, 1, 5),
@@ -443,6 +451,16 @@ read_value(Config *c, const char *section, const char *key, char *v, Rule *rule)
 		if (!strcmp(section, settings[i].section) && !strcmp(key, settings[i].key))
 			return setting(c, &settings[i], v);
 	return 0;
+}
+
+int
+config_default_path(char *path, size_t length)
+{
+	const char *xdg = getenv("XDG_CONFIG_HOME"), *home = getenv("HOME");
+	int n = xdg && xdg[0] == '/' ? snprintf(path, length, "%s/mwm/config.ini", xdg)
+	        : home && *home ? snprintf(path, length, "%s/.config/mwm/config.ini", home)
+	        : snprintf(path, length, "/etc/mwm/config.ini");
+	return n >= 0 && (size_t)n < length;
 }
 
 int

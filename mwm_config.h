@@ -48,8 +48,11 @@ typedef struct {
 	int brightness_min, controls_width;
 	char battery_device[64], backlight_device[64], audio_sink[64];
 	int showsystray, showtraybar, systraymon, systrayspacing, systrayvertpad;
+	int applet_width, applet_rows, wifi_secret_agent, bluetooth_default_agent;
+	char wifi_interface[64], bluetooth_adapter[64];
 	int panelradius, panel_opacity, calendar_width, clock_width, palette_width;
 	int duration, reduced_motion, shadows, shadow_opacity, bar_shadow_blur, panel_shadow_blur;
+	int popup_enter, popup_exit, popup_distance;
 	char font[128], monofont[128];
 	char colors[SchemeLast][3][64];
 	int alpha[SchemeLast];
@@ -69,6 +72,7 @@ typedef struct {
 } Config;
 
 void config_defaults(Config *config);
+int config_default_path(char *path, size_t length);
 int config_read(Config *config, const char *path, int required, char error[CONFIG_ERROR]);
 int config_theme(Config *config, Display *dpy, Window root, Colormap cmap,
                  char error[CONFIG_ERROR]);

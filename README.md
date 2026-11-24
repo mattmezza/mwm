@@ -271,6 +271,8 @@ Set `systraymon` in `[tray]` to pin it to a zero-based monitor index.
 The whole bar slides in from its screen edge and reverses the motion to close.
 Individual segments can also slide open and closed. Adjust timing with
 `duration` in `[motion]`, or enable `reduced_motion` for immediate changes.
+Popups slide in and out using `popup_enter`, `popup_exit` (milliseconds),
+and `popup_distance` (pixels) in the same section.
 Set `separators = true` under `[bar]` to draw lines between items in a segment.
 
 Set `segments` under `[bar]` to arrange the left, center, and right groups.

@@ -52,6 +52,13 @@ typedef struct {
 	int shown;
 } ShellReveal;
 
+typedef struct {
+	ShellSurface surface;
+	Window win;
+	int x, y, distance, duration;
+	double started;
+} ShellPopupExit;
+
 enum { MetricNone = -1, UsageCpu, UsageGpu, UsageRam, UsageCount, MetricLoad = UsageCount,
        MetricNetwork, MetricDisk,
        MetricControl, MetricCount = MetricControl + ControlCount };
@@ -132,7 +139,7 @@ typedef struct {
 	int monitor, width, height, pad, year, month;
 	int calendar_view, browse_year;
 	int zone_start, zone_rows, timer_open, at, selected, cursor;
-	int clock_limit, window_x, clock_anchor, preset_start, preset_more;
+	int clock_limit, window_x, window_y, offset_y, clock_anchor, preset_start, preset_more;
 	cui_rect preset_area;
 	int hover_x, hover_y;
 	ShellHit hits[52];
@@ -154,6 +161,19 @@ int shell_font(ShellFont *, const Config *, char error[CONFIG_ERROR]);
 void shell_font_free(ShellFont *);
 void shell_font_license(void);
 void shell_surface_free(const ShellHost *, ShellSurface *);
+int shell_surface_begin(const ShellHost *, const ShellFont *, unsigned, ShellSurface *,
+                        Window, int width, int height, double elapsed);
+int shell_surface_draw(const ShellHost *, ShellSurface *, Window, const cui_rect *body,
+                       int radius, int outset);
+int shell_popup_padding(const ShellHost *, const Config *);
+void shell_popup_background(cui_context *, const ShellHost *, const Config *, cui_rect, float opacity);
+int shell_popup_entrance(const Config *, double started, double now, int direction, int *offset);
+void shell_popup_dismiss(const ShellHost *, const Config *, ShellPopupExit *, Window,
+                        ShellSurface *, int direction);
+int shell_popup_exit_tick(const ShellHost *, ShellPopupExit *, double now);
+void shell_popup_exit_reset(const ShellHost *, ShellPopupExit *);
+void shell_text(cui_context *, const ShellFont *, int id, cui_rect, const char *,
+                cui_color, float size, cui_text_style, cui_align);
 void shell_icons_free(void);
 double shell_seconds(void);
 float shell_reveal(ShellReveal *, int shown, double elapsed, int duration);

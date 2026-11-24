@@ -339,6 +339,7 @@ static Config settings;
 static ShellHost shell;
 static ShellFont shellfont;
 static ShellPanel panel;
+static ShellPopupExit panel_exit;
 static ShellTooltip tooltip;
 static ShellTimer timer;
 static ShellSystem system_stats;
@@ -355,6 +356,7 @@ static int gap_overridden;
 static const char *layoutsym[] = { "|||", "||=", "><>" };
 
 static const char *reloadstyle(void);
+static void dismisspanel(void);
 static void openpanel(Monitor *, enum ShellAction, float anchor, Time);
 static void adjust_control(int kind, int direction);
 static void panel_event(XEvent *);
@@ -1186,7 +1188,7 @@ togglebar(void)
 	barvisible = !barvisible;
 	animate_bar(tick);
 	if (!barvisible) {
-		shell_panel_close(&shell, &panel);
+		dismisspanel();
 		shell_tooltip_hide(&shell, &tooltip);
 	}
 	updatebars();
@@ -2334,7 +2336,7 @@ dispatchcmd(int argc, char **argv, char *reply, size_t rsz)
 			const BarPlacement *group = &settings.segments[index];
 			for (int i = 0; i < group->count; ++i)
 				if (group->items[i] == item)
-					shell_panel_close(&shell, &panel);
+					dismisspanel();
 		}
 		drawbars();
 	} else if (EQ(verb, "win")) {
@@ -2360,7 +2362,7 @@ dispatchcmd(int argc, char **argv, char *reply, size_t rsz)
 		killfocused();
 	} else if (EQ(verb, "palette")) {
 		if (argc == 2 && EQ(noun, "toggle") && panel.win && panel.kind == ActPalette) {
-			shell_panel_close(&shell, &panel);
+			dismisspanel();
 			return;
 		}
 		if (argc != 1 && !(argc == 2 && EQ(noun, "toggle"))) {
@@ -3283,6 +3285,7 @@ updategeom(int initial)
 		return 0;
 
 	shell_panel_close(&shell, &panel);
+	shell_popup_exit_reset(&shell, &panel_exit);
 	shell_tooltip_close(&shell, &tooltip);
 	/* snapshot old per-monitor selected tags by index */
 	for (i = 0; i < MaxMonitors; i++)
@@ -3486,6 +3489,7 @@ applystyle(const Config *next)
 		gappx_run = next->gappx;
 
 	shell_panel_close(&shell, &panel);
+	shell_popup_exit_reset(&shell, &panel_exit);
 	shell_tooltip_close(&shell, &tooltip);
 	for (Monitor *m = mons; m; m = m->next) {
 		shell_surface_free(&shell, &m->bar.surface);
@@ -3521,6 +3525,10 @@ applystyle(const Config *next)
 		system_next = 0;
 	settings = *next;
 	++theme_revision;
+	Atom config_serial = XInternAtom(dpy, "_MWM_CONFIG_SERIAL", False);
+	unsigned long serial = theme_revision;
+	XChangeProperty(dpy, root, config_serial, XA_CARDINAL, 32, PropModeReplace,
+	                (unsigned char *)&serial, 1);
 	lrpad = 2 * MAX(5, settings.barpadx);
 	int inset = shell_bar_inset(&settings);
 	bh = settings.barheight ? MAX(settings.barheight, (int)font.bar_size + 10 + 2*inset)
@@ -3711,6 +3719,7 @@ cleanup(void)
 	running = 0;
 	controls_reset(&controls);
 	shell_panel_close(&shell, &panel);
+	shell_popup_exit_reset(&shell, &panel_exit);
 	shell_tooltip_close(&shell, &tooltip);
 	while (clients)
 		unmanage(clients, 0);
@@ -4190,7 +4199,7 @@ palette_choose(int row)
 	if (row < 0 || row >= count)
 		return;
 	ShellEntry *entry = &entries[row];
-	shell_panel_close(&shell, &panel);
+	dismisspanel();
 	if (entry->type == EntryLayout) {
 		static const char *names[] = {"cols", "stack", "float"};
 		setlayout(names[entry->value]);
@@ -4210,14 +4219,24 @@ palette_choose(int row)
 }
 
 static void
+dismisspanel(void)
+{
+	if (!panel.win)
+		return;
+	int direction = panel.kind == ActPalette || settings.topbar ? 1 : -1;
+	shell_popup_dismiss(&shell, &settings, &panel_exit, panel.win, &panel.surface, direction);
+	panel = (ShellPanel){0};
+}
+
+static void
 openpanel(Monitor *m, enum ShellAction action, float anchor, Time event_time)
 {
 	if (!m)
 		return;
-	if (panel.win && panel.kind == action && panel.monitor == m->num) {
-		shell_panel_close(&shell, &panel);
+	int same = panel.win && panel.kind == action && panel.monitor == m->num;
+	dismisspanel();
+	if (same)
 		return;
-	}
 	if (shell_panel_open(&shell, &settings, &panel, action, m->num,
 	                     m->mx, m->my, m->mw, m->mh, m->by, bh, anchor, event_time)) {
 		panel_dirty = 1;
@@ -4405,13 +4424,13 @@ panel_key(XKeyEvent *event)
 			panel_dirty = 1;
 			return;
 		}
-		shell_panel_close(&shell, &panel);
+		dismisspanel();
 		return;
 	}
 	/* The palette owns the keyboard grab while open, so sxhkd cannot close it. */
 	if (panel.kind == ActPalette && key == XK_space &&
 	    (event->state & (Mod4Mask | ControlMask | ShiftMask | Mod1Mask)) == (Mod4Mask | ControlMask)) {
-		shell_panel_close(&shell, &panel);
+		dismisspanel();
 		return;
 	}
 	int control = shell_panel_control(panel.kind);
@@ -4507,7 +4526,7 @@ panel_event(XEvent *e)
 	if (click->x < panel.pad || click->x >= panel.pad + panel.width
 	    || click->y < panel.pad || click->y >= panel.pad + panel.height) {
 		enum ShellAction was = panel.kind;
-		shell_panel_close(&shell, &panel);
+		dismisspanel();
 		for (Monitor *m = mons; m; m = m->next) {
 			if (!barvisible || click->y_root < m->by || click->y_root >= m->by + bh)
 				continue;
@@ -4717,6 +4736,7 @@ ui_tick(void)
 		if (composited != shell.composited) {
 			shell.composited = composited;
 			shell_panel_close(&shell, &panel);
+			shell_popup_exit_reset(&shell, &panel_exit);
 			shell_tooltip_close(&shell, &tooltip);
 			updatesystray();
 			drawbars();
@@ -4768,9 +4788,20 @@ ui_tick(void)
 			paintbar(m, now, tick);
 		animating |= bar_level > 0 && m->bar.animating;
 	}
-	int panel_animating = panel.win && shell.composited && !settings.reduced_motion
-	                      && (tick - panel.opened) * 1000 < settings.duration + 16;
-	if (panel.win && (panel_dirty || (panel_animating && can_animate))) {
+	int panel_animating = 0;
+	if (panel.win) {
+		int offset, direction = panel.kind == ActPalette || settings.topbar ? 1 : -1;
+		panel_animating = shell_popup_entrance(&settings, panel.opened, tick, direction, &offset);
+		if (can_animate && panel.offset_y != offset) {
+			panel.offset_y = offset;
+			XMoveWindow(dpy, panel.win, panel.window_x, panel.window_y + offset);
+		}
+		panel_animating |= panel.offset_y != offset;
+	}
+	if (can_animate)
+		shell_popup_exit_tick(&shell, &panel_exit, tick);
+	panel_animating |= panel_exit.win != None;
+	if (panel.win && panel_dirty) {
 		ShellEntry entries[PaletteLimit];
 		int count = panel.kind == ActPalette ? palette_entries(entries) : 0;
 		if (count)
@@ -4873,12 +4904,7 @@ main(int argc, char *argv[])
 	} else if (argc != first) {
 		die("usage: mwm [-v] [-c config.ini]");
 	} else {
-		const char *xdg = getenv("XDG_CONFIG_HOME");
-		const char *home = getenv("HOME");
-		int n = xdg && xdg[0] == '/' ? snprintf(path, sizeof path, "%s/mwm/config.ini", xdg)
-		        : home && *home ? snprintf(path, sizeof path, "%s/.config/mwm/config.ini", home)
-		        : snprintf(path, sizeof path, "/etc/mwm/config.ini");
-		if (n < 0 || (size_t)n >= sizeof path)
+		if (!config_default_path(path, sizeof path))
 			die("mwm: config path is too long");
 		config_path = path;
 	}

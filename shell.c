@@ -179,9 +179,9 @@ shell_surface_free(const ShellHost *host, ShellSurface *surface)
 	*surface = (ShellSurface){0};
 }
 
-static int
-begin(const ShellHost *host, const ShellFont *font, unsigned revision, ShellSurface *surface,
-      Window win, int w, int h, double elapsed)
+int
+shell_surface_begin(const ShellHost *host, const ShellFont *font, unsigned revision,
+                    ShellSurface *surface, Window win, int w, int h, double elapsed)
 {
 	if (surface->revision != revision)
 		shell_surface_free(host, surface);
@@ -352,6 +352,92 @@ shape(const ShellHost *host, ShellSurface *surface, Window win, int w, int h,
 }
 
 int
+shell_surface_draw(const ShellHost *host, ShellSurface *surface, Window win,
+                   const cui_rect *body, int radius, int outset)
+{
+	if (!render(host, surface))
+		return 0;
+	if (body) {
+		int w = surface->image->width, h = surface->image->height;
+		shape(host, surface, win, w, h, body, 1, radius, outset, 1, 0, h);
+	}
+	blit(host, surface, win);
+	return 1;
+}
+
+int
+shell_popup_padding(const ShellHost *host, const Config *config)
+{
+	return host->composited && config->shadows && config->shadow_opacity
+	       ? 4 * config->panel_shadow_blur : 0;
+}
+
+static int
+popup_duration(const Config *c, int duration)
+{
+	return c->reduced_motion || !c->duration || !c->popup_distance ? 0 : duration;
+}
+
+int
+shell_popup_entrance(const Config *c, double started, double now, int direction, int *offset)
+{
+	int duration = popup_duration(c, c->popup_enter);
+	double t = duration ? fmin(1, fmax(0, (now-started) * 1000 / duration)) : 1;
+	double remaining = 1-t;
+	*offset = -direction * (int)round(c->popup_distance * remaining * remaining * remaining);
+	return t < 1;
+}
+
+void
+shell_popup_exit_reset(const ShellHost *host, ShellPopupExit *exit)
+{
+	if (exit->win)
+		XDestroyWindow(host->dpy, exit->win);
+	shell_surface_free(host, &exit->surface);
+	*exit = (ShellPopupExit){0};
+}
+
+void
+shell_popup_dismiss(const ShellHost *host, const Config *c, ShellPopupExit *exit,
+                   Window win, ShellSurface *surface, int direction)
+{
+	if (!win)
+		return;
+	Display *dpy = host->dpy;
+	XUngrabPointer(dpy, CurrentTime);
+	XUngrabKeyboard(dpy, CurrentTime);
+	shell_popup_exit_reset(host, exit);
+	XWindowAttributes attrs;
+	int duration = popup_duration(c, c->popup_exit);
+	if (!duration || !host->shape || !surface->image || !XGetWindowAttributes(dpy, win, &attrs)) {
+		XDestroyWindow(dpy, win);
+		shell_surface_free(host, surface);
+		return;
+	}
+	XShapeCombineRectangles(dpy, win, ShapeInput, 0, 0, NULL, 0, ShapeSet, Unsorted);
+	*exit = (ShellPopupExit){.surface = *surface, .win = win, .x = attrs.x, .y = attrs.y,
+	                        .distance = direction * c->popup_distance, .duration = duration, .started = shell_seconds()};
+	*surface = (ShellSurface){0};
+}
+
+int
+shell_popup_exit_tick(const ShellHost *host, ShellPopupExit *exit, double now)
+{
+	if (!exit->win)
+		return 0;
+	double t = fmax(0, (now-exit->started) * 1000 / exit->duration);
+	if (t >= 1) {
+		shell_popup_exit_reset(host, exit);
+		return 0;
+	}
+	double progress = t * t * (3 - 2*t);
+	XMoveWindow(host->dpy, exit->win, exit->x,
+	            exit->y + (int)round(exit->distance * progress));
+	blit(host, &exit->surface, exit->win);
+	return 1;
+}
+
+int
 shell_bar_inset(const Config *config)
 {
 	return config->shadows && config->shadow_opacity ? 3 * config->bar_shadow_blur + 1 : 0;
@@ -395,14 +481,32 @@ box(Frame *f, int id, cui_rect r, float radius, cui_color bg, cui_color border,
 	cui_end_box(f->ui);
 }
 
+void
+shell_popup_background(cui_context *ui, const ShellHost *host, const Config *c,
+                      cui_rect body, float opacity)
+{
+	Frame f = {.ui = ui, .config = c, .composite = host->composited};
+	cui_color fg = c->palette[SchemeStatus][ColFg];
+	cui_color bg = alpha(c->palette[SchemeStatus][ColBg], 255);
+	cui_color outline = blend(bg, fg, 0.19f);
+	int a = host->composited ? c->panel_opacity * opacity : 255;
+	box(&f, 100, body, c->panelradius, alpha(bg, a), outline, 1, 2);
+}
+
+static float
+fontwidth(const ShellFont *font, const char *s, float size, cui_text_style style)
+{
+	return ceilf(cui_font_measure_styled(font->font, cui_string(s), size, style).width);
+}
+
 static float
 textwidth(const Frame *f, const char *s, float size, cui_text_style style)
 {
-	return ceilf(cui_font_measure_styled(f->font->font, cui_string(s), size, style).width);
+	return fontwidth(f->font, s, size, style);
 }
 
 static void
-ellipsize(const Frame *f, char *out, size_t capacity, const char *s,
+ellipsize(const ShellFont *font, char *out, size_t capacity, const char *s,
           float width, float size, cui_text_style style)
 {
 	if (width <= 0) {
@@ -413,16 +517,16 @@ ellipsize(const Frame *f, char *out, size_t capacity, const char *s,
 	while (((unsigned char)s[n] & 0xc0) == 0x80)
 		--n;
 	snprintf(out, capacity, "%.*s", (int)n, s);
-	float measured = textwidth(f, out, size, style);
+	float measured = fontwidth(font, out, size, style);
 	if (!s[n] && (measured > 0 || n == 0) && measured <= width)
 		return;
-	if (textwidth(f, "…", size, style) > width) {
+	if (fontwidth(font, "…", size, style) > width) {
 		*out = 0;
 		return;
 	}
 	do {
 		memcpy(out + n, "…", sizeof "…");
-		measured = textwidth(f, out, size, style);
+		measured = fontwidth(font, out, size, style);
 		if (!n || (measured > 0 && measured <= width))
 			return;
 		do {
@@ -431,21 +535,28 @@ ellipsize(const Frame *f, char *out, size_t capacity, const char *s,
 	} while (1);
 }
 
-static void
-label(Frame *f, int id, cui_rect r, const char *s, cui_color color, float size,
-      cui_text_style style, cui_align align)
+void
+shell_text(cui_context *ui, const ShellFont *font, int id, cui_rect r, const char *s,
+           cui_color color, float size, cui_text_style style, cui_align align)
 {
 	if (r.w <= 0 || r.h <= 0 || !s[0])
 		return;
 	char text[640];
-	ellipsize(f, text, sizeof text, s, r.w, size, style);
+	ellipsize(font, text, sizeof text, s, r.w, size, style);
 	if (!*text)
 		return;
-	cui_begin_absolute_box(f->ui, (cui_id)id, (cui_box){
+	cui_begin_absolute_box(ui, (cui_id)id, (cui_box){
 		.width = r.w, .height = r.h, .align_x = align, .align_y = CUI_ALIGN_CENTER,
 	}, r);
-	cui_text_line(f->ui, cui_string(text), size, color, ceilf(size + 4), style);
-	cui_end_box(f->ui);
+	cui_text_line(ui, cui_string(text), size, color, ceilf(size + 4), style);
+	cui_end_box(ui);
+}
+
+static void
+label(Frame *f, int id, cui_rect r, const char *s, cui_color color, float size,
+      cui_text_style style, cui_align align)
+{
+	shell_text(f->ui, f->font, id, r, s, color, size, style, align);
 }
 
 static const char *icons[ActTimerFoldOpen + 1] = {
@@ -639,7 +750,7 @@ status_label(Frame *f, cui_rect r, const char *status, int id, cui_color fg)
 	char text[512], clipped[520];
 	cui_text_color_span colors[64];
 	int n = status_parse(status, text, colors, fg);
-	ellipsize(f, clipped, sizeof clipped, text, r.w, f->size, mono);
+	ellipsize(f->font, clipped, sizeof clipped, text, r.w, f->size, mono);
 	size_t len = strlen(clipped);
 	if (!len || r.h <= 0)
 		return;
@@ -1129,7 +1240,7 @@ bar_item_draw(Frame *f, ShellBar *bar, const ShellBarModel *m, enum BarItem kind
 		cui_color ink = c->palette[SchemeTitle][ColFg];
 		glyph(f, 41, r.x+1, r.y+(r.h-17)/2, 17, ActPalette, accent);
 		char title[256];
-		ellipsize(f, title, sizeof title, bar->title, r.w-24, f->size, medium);
+		ellipsize(f->font, title, sizeof title, bar->title, r.w-24, f->size, medium);
 		label(f, 42, (cui_rect){r.x+24, r.y, r.w-24, r.h}, title,
 		      ink, f->size, medium, CUI_ALIGN_START);
 		if (m->title[0])
@@ -1210,7 +1321,7 @@ shell_bar_draw(const ShellHost *host, const ShellFont *font, unsigned revision,
 	int height = h - 2*m->pad;
 	double elapsed = bar->last_frame ? tick - bar->last_frame : 0;
 	if (w < 1 || height < 1
-	    || !begin(host, font, revision, &bar->surface, window, w, h, fmin(elapsed, 0.1)))
+	    || !shell_surface_begin(host, font, revision, &bar->surface, window, w, h, fmin(elapsed, 0.1)))
 		return 0;
 
 	int duration = c->reduced_motion ? 0 : c->duration;
@@ -1463,7 +1574,7 @@ shell_tooltip_draw(const ShellHost *host, const ShellFont *font, unsigned revisi
 		XMoveResizeWindow(dpy, tip->win, geometry.x, geometry.y, w, h);
 	}
 	tip->geometry = geometry;
-	if (!begin(host, font, revision, &tip->surface, tip->win, w, h, 0))
+	if (!shell_surface_begin(host, font, revision, &tip->surface, tip->win, w, h, 0))
 		return;
 
 	f.ui = tip->surface.ui;
@@ -1582,8 +1693,10 @@ shell_clock_resize(const ShellHost *host, const Config *config, ShellPanel *pane
 	panel->zone_rows = rows;
 	panel->height = height;
 	panel->preset_area = (cui_rect){0};
-	int y = panel->clock_anchor - (config->topbar ? 0 : height + 2*panel->pad);
-	XMoveResizeWindow(host->dpy, panel->win, panel->window_x, y, panel->width+2*panel->pad, height+2*panel->pad);
+	panel->window_y = panel->clock_anchor - (config->topbar ? 0 : height + 2*panel->pad);
+	shell_popup_entrance(config, panel->opened, shell_seconds(), config->topbar ? 1 : -1, &panel->offset_y);
+	XMoveResizeWindow(host->dpy, panel->win, panel->window_x, panel->window_y + panel->offset_y,
+	                  panel->width+2*panel->pad, height+2*panel->pad);
 }
 
 int
@@ -1595,8 +1708,7 @@ shell_panel_open(const ShellHost *host, const Config *config, ShellPanel *panel,
 	if (w < 210 || h < (control >= 0 ? 100 : 160))
 		return 0;
 	shell_panel_close(host, panel);
-	int pad = host->composited && config->shadows && config->shadow_opacity
-	          ? 4 * config->panel_shadow_blur : 0;
+	int pad = shell_popup_padding(host, config);
 	int width = MIN(control >= 0 ? config->controls_width : kind == ActPalette ? config->palette_width
 	                : kind == ActClock ? config->clock_width : config->calendar_width, w - 12 - 2*pad);
 	const int separation = 7;
@@ -1626,7 +1738,7 @@ shell_panel_open(const ShellHost *host, const Config *config, ShellPanel *panel,
 	*panel = (ShellPanel){.kind = kind, .monitor = monitor, .width = width,
 	                      .height = height, .pad = pad, .year = local.tm_year+1900, .month = local.tm_mon,
 	                      .zone_rows = zone_rows, .clock_limit = clock_limit, .clock_anchor = clock_anchor,
-	                      .window_x = px,
+	                      .window_x = px, .window_y = py,
 	                      .hover_x = -1, .hover_y = -1, .control_request = -1,
 	                      .opened = shell_seconds()};
 	XSetWindowAttributes attrs = {
@@ -1634,7 +1746,9 @@ shell_panel_open(const ShellHost *host, const Config *config, ShellPanel *panel,
 		.event_mask = ExposureMask | ButtonPressMask | ButtonReleaseMask | PointerMotionMask | KeyPressMask,
 	};
 	Display *dpy = host->dpy;
-	panel->win = XCreateWindow(dpy, host->root, px, py, width+2*pad, height+2*pad,
+	shell_popup_entrance(config, panel->opened, panel->opened, kind == ActPalette || config->topbar ? 1 : -1,
+	                     &panel->offset_y);
+	panel->win = XCreateWindow(dpy, host->root, px, py + panel->offset_y, width+2*pad, height+2*pad,
 	                           0, host->depth, InputOutput, host->visual,
 	                           CWOverrideRedirect | CWBackPixel | CWBorderPixel | CWColormap | CWEventMask,
 	                           &attrs);
@@ -2036,7 +2150,7 @@ shell_panel_draw(const ShellHost *host, const ShellFont *font, unsigned revision
                  const Controls *controls, const ShellEntry *entries, int count, time_t now, double tick)
 {
 	int w = p->width+2*p->pad, h = p->height+2*p->pad;
-	if (!p->win || !begin(host, font, revision, &p->surface, p->win, w, h, 0.016))
+	if (!p->win || !shell_surface_begin(host, font, revision, &p->surface, p->win, w, h, 0.016))
 		return 0;
 	Frame f = {p->surface.ui, font, c, p->hits, 0, COUNT(p->hits),
 	           p->hover_x, p->hover_y, host->composited, 1, font->size, {0, 0, 0, 0}};
@@ -2045,16 +2159,8 @@ shell_panel_draw(const ShellHost *host, const ShellFont *font, unsigned revision
 	cui_color accent = alpha(c->palette[SchemeSel][ColBg], 255), ink = c->palette[SchemeSel][ColFg];
 	cui_color card = blend(bg, fg, 0.10f), muted = blend(bg, fg, 0.64f);
 	cui_color outline = blend(bg, fg, 0.19f);
-	float radius = c->panelradius;
 	cui_rect body = {p->pad, p->pad, p->width, p->height};
-	/* The primary surface settles in place while its input region stays stable. */
-	float t = !c->reduced_motion && c->duration && host->composited
-	          ? fmin(1, (tick-p->opened)*1000/c->duration) : 1;
-	cui_rect animated = body;
-	if (p->pad)
-		animated.y += (1-t) * 4 * (c->topbar ? -1 : 1);
-	int opacity = host->composited ? c->panel_opacity : 255;
-	box(&f, 100, animated, radius, alpha(bg, opacity * (0.92f+0.08f*t)), outline, 1, 2);
+	shell_popup_background(f.ui, host, c, body, 1);
 	struct tm local = {0};
 	localtime_r(&now, &local);
 	int control = shell_panel_control(p->kind);
@@ -2066,12 +2172,9 @@ shell_panel_draw(const ShellHost *host, const ShellFont *font, unsigned revision
 		world_clock(&f, p, timer, &local, now, tick, fg, muted, accent, ink, card, outline);
 	else
 		palette(&f, p, entries, count, fg, muted, accent, ink, card, outline);
-	if (render(host, &p->surface)) {
+	if (shell_surface_draw(host, &p->surface, p->win, &body, c->panelradius, p->pad))
 		p->nhits = f.nhits;
-		shape(host, &p->surface, p->win, w, h, &body, 1, radius, p->pad, 1, 0, h);
-		blit(host, &p->surface, p->win);
-	}
-	return t < 1;
+	return 1;
 }
 
 static int
