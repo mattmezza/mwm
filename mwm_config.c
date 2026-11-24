@@ -13,6 +13,9 @@
 
 #define COUNT(a) (sizeof(a) / sizeof((a)[0]))
 
+static const char default_segments[] = "tags, title | | status, system, power, datetime, tray";
+static int read_segments(Config *, char *, const BarPlacement *, int);
+
 void
 config_defaults(Config *c)
 {
@@ -33,13 +36,13 @@ config_defaults(Config *c)
 		.defaultlayout = 1, .nmaster = 1, .mfact = 0.5f,
 		.topbar = 1, .showbar = 1, .barvertpad = 6, .barpadx = 12,
 		.barmargin = 6, .barvmargin = 6, .barseggap = 10, .segradius = 6, .tagradius = 3, .barfontsize = 16,
-		.segments = {{BarTags, BarLeft}, {BarTitle, BarLeft}, {BarStatus, BarRight},
-		             {BarSystem, BarRight}, {BarDatetime, BarRight}, {BarTray, BarRight}},
-		.nsegments = BarSegmentCount,
 		.timerprogressheight = 2,
-		.cpu_interval = 250, .cpu_history = 40, .cpu_width = 44,
-		.ram_history = 40, .ram_width = 44,
+		.cpu_interval = 250, .cpu_history = 40, .cpu_width = 36,
+		.ram_history = 40, .ram_width = 36,
 		.load_width = 26, .tooltip_delay = 350,
+		.controls_interval = 1000, .battery_low = 25, .battery_critical = 10,
+		.battery_step = 5, .volume_step = 5, .brightness_step = 5, .brightness_min = 1,
+		.controls_width = 270, .audio_sink = "@DEFAULT_AUDIO_SINK@",
 		.showsystray = 1, .showtraybar = 1, .systraymon = -1, .systrayspacing = 7, .systrayvertpad = 6,
 		.panelradius = 6, .panel_opacity = 255, .calendar_width = 394, .clock_width = 448, .palette_width = 530,
 		.duration = 150, .shadows = 1, .shadow_opacity = 112, .bar_shadow_blur = 2, .panel_shadow_blur = 6,
@@ -63,6 +66,9 @@ config_defaults(Config *c)
 		c->tagmon[i] = i == 0 ? 0 : -1;
 	}
 	memcpy(c->rules, rules, sizeof rules);
+	char placement[sizeof default_segments];
+	strcpy(placement, default_segments);
+	read_segments(c, placement, NULL, 0);
 }
 
 typedef struct {
@@ -95,6 +101,17 @@ static const Setting settings[] = {
 	INT("system", "ram_width", ram_width, 16, MAX_USAGE_WIDTH),
 	INT("system", "load_width", load_width, 18, 80),
 	INT("system", "tooltip_delay", tooltip_delay, -1, 2000),
+	INT("controls", "interval", controls_interval, 250, 60000),
+	INT("controls", "battery_low", battery_low, 0, 100),
+	INT("controls", "battery_critical", battery_critical, 0, 100),
+	INT("controls", "battery_step", battery_step, 1, 25),
+	INT("controls", "volume_step", volume_step, 1, 25),
+	INT("controls", "brightness_step", brightness_step, 1, 25),
+	INT("controls", "brightness_min", brightness_min, 1, 100),
+	INT("controls", "popup_width", controls_width, 210, 540),
+	STR("controls", "battery_device", battery_device),
+	STR("controls", "backlight_device", backlight_device),
+	STR("controls", "audio_sink", audio_sink),
 	INT("tray", "showsystray", showsystray, 0, 1), INT("tray", "showtraybar", showtraybar, 0, 1),
 	INT("tray", "systraymon", systraymon, -1, 99), INT("tray", "systrayspacing", systrayspacing, 0, 24),
 	INT("tray", "systrayvertpad", systrayvertpad, 0, 24),
@@ -153,7 +170,9 @@ setting(Config *c, const Setting *s, const char *value)
 {
 	void *dest = (char *)c + s->offset;
 	if (s->length)
-		return (*value || s->offset == offsetof(Config, hook)) && copy_value(dest, s->length, value);
+		return (*value || s->offset == offsetof(Config, hook) ||
+		        s->offset == offsetof(Config, battery_device) || s->offset == offsetof(Config, backlight_device))
+		       && copy_value(dest, s->length, value);
 	if (s->offset == offsetof(Config, mfact)) {
 		char *end;
 		float f = strtof(value, &end);
@@ -279,10 +298,49 @@ read_presets(Config *c, const char *value)
 	} while (1);
 }
 
+static const char *item_names[BarItemCount] = {
+	[BarTags] = "spaces", [BarLayout] = "layout", [BarTitle] = "title", [BarStatus] = "status",
+	[BarCpu] = "cpu", [BarRam] = "ram", [BarLoad] = "load", [BarDate] = "date", [BarTime] = "time",
+	[BarTray] = "tray", [BarBattery] = "battery", [BarVolume] = "volume", [BarBrightness] = "brightness",
+};
+
+static const BarPlacement builtins[] = {
+	{.name = "tags", .items = {BarTags, BarLayout}, .count = 2},
+	{.name = "system", .items = {BarCpu, BarRam, BarLoad}, .count = 3},
+	{.name = "datetime", .items = {BarDate, BarTime}, .count = 2},
+	{.name = "power", .items = {BarBattery, BarVolume, BarBrightness}, .count = 3},
+};
+
 static int
-read_segments(Config *c, char *value)
+bar_item(const char *name)
 {
-	const char *names[] = {"tags", "title", "status", "system", "datetime", "tray"};
+	for (int i = 0; i < BarItemCount; ++i)
+		if (!strcmp(name, item_names[i]))
+			return i;
+	return -1;
+}
+
+static int
+segment_definition(BarPlacement *definition, const char *name, char *value)
+{
+	static const char allowed[] = "abcdefghijklmnopqrstuvwxyz0123456789_-";
+	if (!*name || name[strspn(name, allowed)] || bar_item(name) >= 0 ||
+	    !copy_value(definition->name, sizeof definition->name, name))
+		return 0;
+	unsigned seen = 0;
+	while (value) {
+		int item = bar_item(trim(strsep(&value, ",")));
+		if (item < 0 || (seen & (1u << item)))
+			return 0;
+		seen |= 1u << item;
+		definition->items[definition->count++] = item;
+	}
+	return definition->count != 0;
+}
+
+static int
+read_segments(Config *c, char *value, const BarPlacement *definitions, int count)
+{
 	unsigned seen = 0;
 	c->nsegments = 0;
 	for (enum BarAlign align = BarLeft; align < BarAlignCount; ++align) {
@@ -290,21 +348,45 @@ read_segments(Config *c, char *value)
 		if (!group)
 			return 0;
 		group = trim(group);
-		while (*group) {
+		if (!*group)
+			continue;
+		while (group) {
 			char *name = trim(strsep(&group, ","));
-			int id = 0;
-			while (id < BarSegmentCount && strcmp(name, names[id]))
-				++id;
-			if (id == BarSegmentCount || (seen & (1u << id)) || (group && !*trim(group)))
+			int item = bar_item(name);
+			BarPlacement segment = {0};
+			if (item >= 0) {
+				strcpy(segment.name, name);
+				segment.items[0] = item;
+				segment.count = 1;
+			}
+			for (size_t i = 0; !segment.count && i < COUNT(builtins); ++i)
+				if (!strcmp(builtins[i].name, name))
+					segment = builtins[i];
+			for (int i = 0; i < count; ++i)
+				if (!strcmp(definitions[i].name, name))
+					segment = definitions[i];
+			if (!segment.count)
 				return 0;
-			seen |= 1u << id;
-			c->segments[c->nsegments++] = (BarPlacement){id, align};
-			if (!group)
-				break;
+			for (int i = 0; i < segment.count; ++i) {
+				unsigned bit = 1u << segment.items[i];
+				if (seen & bit)
+					return 0;
+				seen |= bit;
+			}
+			segment.align = align;
+			c->segments[c->nsegments++] = segment;
 		}
 	}
-	c->custom_segments = 1;
 	return value == NULL;
+}
+
+int
+config_segment(const Config *c, const char *name)
+{
+	for (int i = 0; i < c->nsegments; ++i)
+		if (!strcmp(c->segments[i].name, name))
+			return i;
+	return -1;
 }
 
 static int
@@ -322,8 +404,6 @@ read_value(Config *c, const char *section, const char *key, char *v, Rule *rule)
 		return integer(v, -1, 99, &c->tagmon[id - 1]);
 	if (!strcmp(section, "clock") && !strcmp(key, "in_presets"))
 		return read_presets(c, v);
-	if (!strcmp(section, "bar") && !strcmp(key, "segments"))
-		return read_segments(c, v);
 	if (!strcmp(section, "timezones")) {
 		for (id = 0; id < c->nzones; ++id)
 			if (!strcmp(c->zones[id].label, key))
@@ -358,7 +438,10 @@ config_read(Config *c, const char *path, int required, char error[CONFIG_ERROR])
 	char line[1024], section[80] = "";
 	int number = 0;
 	int rule_lines[MAX_RULES] = {0}, tag_lines[MAX_TAGS] = {0};
-	int custom_rules = 0;
+	int custom_rules = 0, placement_line = 0, defined = 0;
+	BarPlacement definitions[MAX_BAR_SEGMENTS] = {0};
+	char placement[sizeof line];
+	strcpy(placement, default_segments);
 	Rule *rule = NULL;
 	const char *reason = NULL;
 	if (!file) {
@@ -402,7 +485,7 @@ config_read(Config *c, const char *path, int required, char error[CONFIG_ERROR])
 				*rule = (Rule){.floating = -1};
 			} else {
 				const char *sections[] = {"bar", "layout", "theme", "motion", "tray", "panels", "clock", "system",
-				                          "timezones", "tags", "tag_monitors"};
+				                          "timezones", "tags", "tag_monitors", "segments", "controls"};
 				size_t i = 0;
 				while (i < COUNT(sections) && strcmp(section, sections[i]))
 					++i;
@@ -420,7 +503,25 @@ config_read(Config *c, const char *path, int required, char error[CONFIG_ERROR])
 		}
 		*equals = 0;
 		const char *key = trim(s);
-		if (!read_value(c, section, key, trim(equals + 1), rule)) {
+		char *value = trim(equals + 1);
+		if (!strcmp(section, "bar") && !strcmp(key, "segments")) {
+			strcpy(placement, value);
+			placement_line = number;
+			continue;
+		}
+		if (!strcmp(section, "segments")) {
+			int i = 0;
+			while (i < defined && strcmp(definitions[i].name, key))
+				++i;
+			if (i != defined || defined == MAX_BAR_SEGMENTS ||
+			    !segment_definition(&definitions[defined], key, value)) {
+				reason = "invalid or duplicate segment definition";
+				break;
+			}
+			++defined;
+			continue;
+		}
+		if (!read_value(c, section, key, value, rule)) {
 			reason = "unknown key or invalid value";
 			break;
 		}
@@ -431,6 +532,13 @@ config_read(Config *c, const char *path, int required, char error[CONFIG_ERROR])
 	if (ferror(file))
 		reason = "read failed";
 	fclose(file);
+	if (!reason && !read_segments(c, placement, definitions, defined)) {
+		number = placement_line;
+		reason = "invalid segment placement or repeated bar item";
+	}
+	c->custom_segments = placement_line != 0;
+	if (!reason && c->battery_critical > c->battery_low)
+		reason = "battery_critical must be at or below battery_low";
 	for (int i = 0; !reason && i < c->nrules; ++i)
 		if (c->rules[i].tag[0] && config_tag(c, c->rules[i].tag) < 0) {
 			number = rule_lines[i];

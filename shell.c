@@ -17,6 +17,7 @@
 #include <unistd.h>
 
 #include "cui/cui_icon.h"
+#include "cui/cui_styled_slider_events.h"
 #include "cui/cui_text.h"
 #include "font_assets.h"
 
@@ -38,6 +39,7 @@ typedef struct {
 	int hover_x, hover_y;
 	int composite;
 	float hover, size;
+	cui_rect group;
 } Frame;
 
 unsigned long
@@ -308,15 +310,18 @@ rounded(Display *dpy, Pixmap mask, GC gc, cui_rect box, int radius)
 
 static void
 shape(const ShellHost *host, ShellSurface *surface, Window win, int w, int h,
-      const cui_rect *boxes, int n, int radius, int outset, int input)
+      const cui_rect *boxes, int n, int radius, int outset, int input, int top, int bottom)
 {
 	if (!host->shape || (surface->shape_count == n && surface->shape_radius == radius
-	    && surface->shape_outset == outset && !memcmp(surface->shapes, boxes, n * sizeof *boxes)))
+	    && surface->shape_outset == outset && surface->shape_top == top &&
+	    surface->shape_bottom == bottom && !memcmp(surface->shapes, boxes, n * sizeof *boxes)))
 		return;
 	memcpy(surface->shapes, boxes, n * sizeof *boxes);
 	surface->shape_count = n;
 	surface->shape_radius = radius;
 	surface->shape_outset = outset;
+	surface->shape_top = top;
+	surface->shape_bottom = bottom;
 	Display *dpy = host->dpy;
 	Pixmap mask = XCreatePixmap(dpy, win, w, h, 1);
 	GC gc = XCreateGC(dpy, mask, 0, NULL);
@@ -325,18 +330,23 @@ shape(const ShellHost *host, ShellSurface *surface, Window win, int w, int h,
 	XSetForeground(dpy, gc, 1);
 	for (int i = 0; i < n; ++i)
 		rounded(dpy, mask, gc, boxes[i], radius);
-	if (input)
+	XRectangle input_bounds = {0, top, w, MAX(0, bottom-top)};
+	if (input) {
 		XShapeCombineMask(dpy, win, ShapeInput, 0, 0, mask, ShapeSet);
-	else
+		if (top > 0 || bottom < h)
+			XShapeCombineRectangles(dpy, win, ShapeInput, 0, 0, &input_bounds, 1, ShapeIntersect, Unsorted);
+	} else {
 		XShapeCombineRectangles(dpy, win, ShapeInput, 0, 0, NULL, 0, ShapeSet, Unsorted);
-	if (outset) {
+	}
+	if (outset)
 		for (int i = 0; i < n; ++i) {
 			cui_rect bounds = {boxes[i].x - outset, boxes[i].y - outset,
 			                   boxes[i].w + 2*outset, boxes[i].h + 2*outset};
 			rounded(dpy, mask, gc, bounds, radius + outset);
 		}
-	}
 	XShapeCombineMask(dpy, win, ShapeBounding, 0, 0, mask, ShapeSet);
+	if (top > 0 || bottom < h)
+		XShapeCombineRectangles(dpy, win, ShapeBounding, 0, 0, &input_bounds, 1, ShapeIntersect, Unsorted);
 	XFreeGC(dpy, gc);
 	XFreePixmap(dpy, mask);
 }
@@ -463,6 +473,20 @@ static const char *usage_icons[UsageCount] = {
 	             "<path d='M6 10h4v3H6zM14 10h4v3h-4zM6 16.5v3m4-3v3m4-3v3m4-3v3'/>",
 };
 
+/* The silhouette and fill share a 24px grid so the level clips cleanly. */
+static const char *control_outline[ControlCount] = {
+	[ControlBattery] = "<rect x='6.5' y='4.5' width='11' height='17.5' rx='2.6'/><path d='M10 2h4'/>",
+	[ControlVolume] = "<path d='M4 9h3l5-4v14l-5-4H4zM15.5 9a4.4 4.4 0 0 1 0 6m2.8-8.8a8 8 0 0 1 0 11.6'/>",
+	[ControlBrightness] = "<circle cx='12' cy='12' r='5.1'/>"
+	                      "<path d='M12 2v2m0 16v2M2 12h2m16 0h2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4"
+	                      "m0-14.2-1.4 1.4M6.3 17.7l-1.4 1.4'/>",
+};
+static const char *control_fill[ControlCount] = {
+	[ControlBattery] = "<rect x='8.4' y='6.3' width='7.2' height='13.9' rx='1.15' fill='#fff' stroke='none'/>",
+	[ControlVolume] = "<path d='M4 9h3l5-4v14l-5-4H4z' fill='#fff' stroke='none'/>",
+	[ControlBrightness] = "<circle cx='12' cy='12' r='4.8' fill='#fff' stroke='none'/>",
+};
+static const char *control_name[ControlCount] = {"Battery", "Volume", "Brightness"};
 static void
 icon(Frame *f, int id, cui_rect rect, const char *paths, cui_color fg, cui_icon_state *state)
 {
@@ -486,6 +510,8 @@ icon(Frame *f, int id, cui_rect rect, const char *paths, cui_color fg, cui_icon_
 static cui_icon_state icon_states[COUNT(icons)];
 static cui_icon_state layout_states[COUNT(layout_icons)];
 static cui_icon_state usage_states[UsageCount];
+static cui_icon_state control_outline_states[ControlCount], control_fill_states[ControlCount];
+static cui_icon_state charge_state, mute_state;
 
 void
 shell_icons_free(void)
@@ -496,6 +522,12 @@ shell_icons_free(void)
 		cui_icon_state_destroy(&layout_states[i]);
 	for (int i = 0; i < UsageCount; ++i)
 		cui_icon_state_destroy(&usage_states[i]);
+	for (int i = 0; i < ControlCount; ++i) {
+		cui_icon_state_destroy(&control_outline_states[i]);
+		cui_icon_state_destroy(&control_fill_states[i]);
+	}
+	cui_icon_state_destroy(&charge_state);
+	cui_icon_state_destroy(&mute_state);
 }
 
 static void
@@ -519,9 +551,21 @@ shell_hit(const ShellHit *hits, int count, int x, int y)
 	return (ShellHit){0};
 }
 
+static cui_rect
+group_rect(const Frame *f, cui_rect r)
+{
+	if (!f->group.w)
+		return r;
+	float left = fmaxf(0, r.x), top = fmaxf(0, r.y);
+	return (cui_rect){f->group.x+left, f->group.y+top,
+	                  fmaxf(0, fminf(r.x+r.w, f->group.w)-left),
+	                  fmaxf(0, fminf(r.y+r.h, f->group.h)-top)};
+}
+
 static void
 hit(Frame *f, cui_rect r, enum ShellAction action, time_t value)
 {
+	r = group_rect(f, r);
 	if (r.w > 0 && r.h > 0 && f->nhits < f->capacity)
 		f->hits[f->nhits++] = (ShellHit){r, action, value};
 }
@@ -629,19 +673,18 @@ bar_clock(Frame *f, cui_rect r, const char *text, enum ShellAction action, int i
 	hit(f, r, action, 0);
 }
 
-static float
-reveal(ShellBar *bar, ShellReveal *state, int shown, double tick, int duration)
+float
+shell_reveal(ShellReveal *state, int shown, double elapsed, int duration)
 {
-	if (!duration || !bar->last_frame) {
+	if (!duration) {
 		*state = (ShellReveal){.progress = shown, .shown = shown};
 		return shown;
 	}
 	/* Play the same easing curve backward when a segment closes, including
 	 * when it reverses before the transition has finished. */
-	double step = (tick - bar->last_frame) * 1000 / duration;
+	double step = elapsed * 1000 / duration;
 	float t = fmin(1, fmax(0, state->progress + (state->shown ? step : -step)));
 	*state = (ShellReveal){.progress = t, .shown = shown};
-	bar->animating |= t != shown;
 	return t*t*(3 - 2*t);
 }
 
@@ -662,7 +705,7 @@ enum { LayoutButtonWidth = 34 };
 static int
 tags_width(const Frame *f, const ShellBarModel *m)
 {
-	int width = m->layout >= 0 ? LayoutButtonWidth + 8 : m->ntags ? 8 : 0;
+	int width = 0;
 	for (int i = 0; i < m->ntags; ++i)
 		width += tag_width(f, &m->tags[i]);
 	return width;
@@ -670,18 +713,14 @@ tags_width(const Frame *f, const ShellBarModel *m)
 
 static void
 bar_tags(Frame *f, ShellBar *bar, cui_rect area, const ShellBarModel *m,
-         double tick, int duration, cui_color outline, cui_color accent)
+         double tick, int duration)
 {
 	const Config *c = f->config;
 	int width = area.w, y = area.y, height = area.h;
-	float radius = c->segradius, size = f->size;
+	float size = f->size;
 	cui_color norm = c->palette[SchemeNorm][ColFg];
 	cui_color norm_bg = surface_color(f, SchemeNorm);
-	/* Fit the active tag first, then lay the visible tags out in tag order. */
-	int layoutw = m->layout >= 0 && m->layout < COUNT(layout_icons)
-	              && width >= LayoutButtonWidth + 8 + (m->ntags ? 32 : 0)
-	              ? LayoutButtonWidth : 0;
-	int leftw = layoutw + 8;
+	int leftw = 0;
 	int tagw[MAX_TAGS] = {0};
 	for (int pass = 0; pass < 2; ++pass)
 		for (int i = 0; i < m->ntags; ++i) {
@@ -694,10 +733,9 @@ bar_tags(Frame *f, ShellBar *bar, cui_rect area, const ShellBarModel *m,
 				leftw += allocated;
 			}
 		}
-	if (leftw > 8) {
+	if (leftw > 0) {
 		cui_rect left = {area.x, y, width, height};
-		box(f, 20, left, radius, norm_bg, outline, norm_bg.a != 0, 1);
-		int x = area.x + 4;
+		int x = area.x;
 		cui_rect selected = {0};
 		for (int i = 0; i < m->ntags; ++i) {
 			if (!tagw[i])
@@ -722,14 +760,14 @@ bar_tags(Frame *f, ShellBar *bar, cui_rect area, const ShellBarModel *m,
 			bar->selected_w = bar->from_w + (selected.w - bar->from_w) * eased;
 			bar->animating |= t < 1;
 			bar->tag = m->tag;
-			float sx = left.x + fmaxf(bar->selected_x, 3);
-			float sw = fminf(bar->selected_w, left.x + left.w - 3 - sx);
+			float sx = left.x + fmaxf(bar->selected_x, 0);
+			float sw = fminf(bar->selected_w, left.x + left.w - sx);
 			box(f, 21, (cui_rect){sx, selected.y, sw, selected.h}, c->tagradius,
 			    surface_color(f, SchemeSel), transparent, 0, 0);
 		} else {
 			bar->selected_w = 0;
 		}
-		x = area.x + 4;
+		x = area.x;
 		for (int i = 0; i < m->ntags; ++i) {
 			const ShellTag *tag = &m->tags[i];
 			if (!tagw[i])
@@ -748,66 +786,40 @@ bar_tags(Frame *f, ShellBar *bar, cui_rect area, const ShellBarModel *m,
 			hit(f, r, ActTag, tag->id);
 			x += tagw[i];
 		}
-		if (layoutw) {
-			cui_rect r = {x, y+4, layoutw, height-8};
-			if (x > area.x + 4)
-				box(f, 24, (cui_rect){x, y+9, 1, height-18}, 0, outline, transparent, 0, 0);
-			if (inside(r, f->hover_x, f->hover_y))
-				box(f, 25, r, c->tagradius, blend(norm_bg, norm, 0.12f * f->hover),
-				    transparent, 0, 0);
-			int size = MIN(22, (int)r.h);
-			cui_rect image = {r.x + ((int)r.w - size)/2, r.y + ((int)r.h - size)/2, size, size};
-			icon(f, 26, image, layout_icons[m->layout], accent, &layout_states[m->layout]);
-			hit(f, r, ActLayout, 0);
-		}
 	} else {
 		bar->selected_w = 0;
 	}
 }
 
 static void
-bar_datetime(Frame *f, cui_rect r, const char *date, const char *clock,
-             const ShellTimer *timer, time_t now, double tick, cui_color outline, cui_color accent)
+bar_layout(Frame *f, cui_rect r, int layout, cui_color bg, cui_color accent)
 {
-	const Config *c = f->config;
-	int y = r.y, height = r.h;
-	float size = f->size;
-	cui_color fg = c->palette[SchemeStatus][ColFg], status_bg = surface_color(f, SchemeStatus);
-	int cw = textwidth(f, clock, size, mono) + 39;
-	int dw = textwidth(f, date, size, mono) + 39;
-	int clockw = cw + dw + 8;
-	int show_icons = r.w >= clockw;
-	if (!show_icons)
-		cw -= 26;
-	int clockx = r.x, right = r.x + r.w;
-	cw = MIN(cw, MAX(0, (int)r.w - 8));
-	dw = MAX(0, (int)r.w - cw - 8);
-	if (dw < 34) {
-		dw = 0;
-		cw = MAX(0, (int)r.w - 8);
-	}
-	box(f, 10, r, c->segradius, status_bg, outline, status_bg.a != 0, 1);
-	bar_clock(f, (cui_rect){clockx+4, y+2, dw, height-4}, date, ActCalendar,
-	          11, status_bg, fg, accent, show_icons);
-	cui_rect hour = {right-cw-4, y+2, cw, height-4};
-	bar_clock(f, hour, clock, ActClock, 15, status_bg, fg, accent, show_icons);
-	if (dw > 20)
-		box(f, 19, (cui_rect){clockx+dw+4, y+8, 1, height-16},
-		    0, outline, transparent, 0, 0);
-	if (timer->active && c->timerprogressheight && hour.w > 20) {
-		int thickness = c->timerprogressheight;
-		cui_rect rail = {hour.x+5, y+height-1-thickness, hour.w-10, thickness};
-		double remaining = shell_timer_remaining(timer, now, tick);
-		float elapsed = 1 - fmin(fmax(remaining / timer->duration, 0), 1);
-		box(f, 30, rail, thickness/2.f, blend(status_bg, accent, 0.35f), transparent, 0, 0);
-		rail.w = MAX(thickness, roundf(rail.w * elapsed));
-		box(f, 31, rail, thickness/2.f, accent, transparent, 0, 0);
-	}
+	if (layout < 0 || layout >= COUNT(layout_icons))
+		return;
+	if (inside(r, f->hover_x, f->hover_y))
+		box(f, 25, r, f->config->tagradius, blend(bg, accent, 0.10f), transparent, 0, 0);
+	int size = MIN(22, (int)MIN(r.h, r.w));
+	cui_rect image = {r.x + ((int)r.w-size)/2, r.y + ((int)r.h-size)/2, size, size};
+	icon(f, 26, image, layout_icons[layout], accent, &layout_states[layout]);
+	hit(f, r, ActLayout, 0);
 }
 
-enum { SystemPadding = 9, SystemGap = 5, SystemDividerGap = 14, UsageIconSize = 18, LoadMinWidth = 18 };
+static void
+bar_time_progress(Frame *f, cui_rect r, const ShellTimer *timer, time_t now, double tick,
+                  cui_color bg, cui_color accent)
+{
+	int thickness = f->config->timerprogressheight;
+	if (!timer->active || !thickness || r.w < 20)
+		return;
+	cui_rect rail = {r.x+5, r.y+r.h-1-thickness, r.w-10, thickness};
+	double remaining = shell_timer_remaining(timer, now, tick);
+	float elapsed = 1 - fmin(fmax(remaining / timer->duration, 0), 1);
+	box(f, 30, rail, thickness/2.f, blend(bg, accent, 0.35f), transparent, 0, 0);
+	rail.w = MAX(thickness, roundf(rail.w * elapsed));
+	box(f, 31, rail, thickness/2.f, accent, transparent, 0, 0);
+}
 
-static const int system_min_width = 2*SystemPadding + 2*SystemDividerGap + 2*UsageIconSize + LoadMinWidth;
+enum { GroupPadding = 8, GroupGap = 9, SystemGap = 5, UsageIconSize = 18, LoadMinWidth = 18 };
 static const char *metric_name[MetricCount] = {"CPU utilization", "RAM utilization", "Load average"};
 
 static const cui_chart_datum *
@@ -824,6 +836,40 @@ usage_color(const Config *config, cui_color accent, double percent)
 	if (percent <= 75)
 		return blend(accent, warning, fmax(0, (percent - 50) / 25));
 	return blend(warning, danger, fmin(1, (percent - 75) / 15));
+}
+
+static cui_color
+control_color(const Config *c, enum Control kind, int level, cui_color accent)
+{
+	if (kind != ControlBattery || level > c->battery_low)
+		return accent;
+	if (level <= c->battery_critical)
+		return c->usage_palette[UsageDanger];
+	return blend(c->usage_palette[UsageDanger], c->usage_palette[UsageWarning],
+	             (float)(level-c->battery_critical)/(c->battery_low-c->battery_critical));
+}
+
+static void
+level_icon(Frame *f, int id, cui_rect r, enum Control kind, const ControlReading *data,
+           int value, cui_color fg, cui_color bg, cui_color accent)
+{
+	static const float floor[] = {20.2f, 19, 16.8f}, ceiling[] = {6.3f, 5, 7.2f};
+	cui_color color = control_color(f->config, kind, value, accent);
+	int fill_value = data->available && !data->muted ? value : 0;
+	float scale = r.h / 24;
+	float cut = (floor[kind] - (floor[kind]-ceiling[kind]) * fill_value / 100) * scale;
+	if (fill_value) {
+		clip(f, id, (cui_rect){r.x, r.y+cut, r.w, r.h-cut});
+		icon(f, id+1, (cui_rect){0, -cut, r.w, r.h}, control_fill[kind], color, &control_fill_states[kind]);
+		cui_end_box(f->ui);
+	}
+	icon(f, id+2, r, control_outline[kind], data->available ? color : alpha(fg, 80),
+	     &control_outline_states[kind]);
+	if (data->charging)
+		icon(f, id+3, r, "<path d='m12.9 7.8-3 5h2.2l-.9 3.4 3-4.9h-2.1z' fill='#fff' stroke-width='.65'/>",
+		     value >= 65 ? alpha(bg, 255) : fg, &charge_state);
+	if (data->muted)
+		icon(f, id+4, r, "<path d='m3 20 17-17'/>", fg, &mute_state);
 }
 
 static void
@@ -890,39 +936,6 @@ bar_load(Frame *f, const ShellSystem *system, cui_rect r, cui_color fg, cui_colo
 	}
 }
 
-static void
-bar_system(Frame *f, ShellBar *bar, cui_rect r, const ShellSystem *system,
-           cui_color outline, cui_color accent)
-{
-	const Config *c = f->config;
-	cui_color bg = surface_color(f, SchemeStatus), fg = c->palette[SchemeStatus][ColFg];
-	box(f, 50, r, c->segradius, bg, outline, bg.a != 0, 1);
-
-	int graphs = (int)r.w - system_min_width;
-	int load_width = MIN(c->load_width, LoadMinWidth + graphs);
-	graphs -= load_width - LoadMinWidth;
-	int cpu_graph = graphs * (SystemGap + c->cpu_width) / (2*SystemGap + c->cpu_width + c->ram_width);
-	int cpu = UsageIconSize + cpu_graph, ram = UsageIconSize + graphs - cpu_graph;
-	int x = r.x + SystemPadding;
-	bar->metrics[UsageCpu] = (cui_rect){x, r.y, cpu, r.h};
-	bar->metrics[UsageRam] = (cui_rect){x+cpu+SystemDividerGap, r.y, ram, r.h};
-	bar->metrics[MetricLoad] = (cui_rect){x+cpu+ram+2*SystemDividerGap, r.y, load_width, r.h};
-	for (int i = 0; i < MetricCount; ++i) {
-		cui_rect item = bar->metrics[i];
-		if (i > 0)
-			box(f, 50+i, (cui_rect){item.x-SystemDividerGap/2, r.y+8, 1, r.h-16},
-			    0, outline, transparent, 0, 0);
-		if (c->tooltip_delay >= 0 && inside(item, f->hover_x, f->hover_y))
-			box(f, 54+i, (cui_rect){item.x-3, r.y+3, item.w+6, r.h-6},
-			    c->segradius, blend(bg, fg, 0.08f), transparent, 0, 0);
-	}
-	bar_usage(f, &bar->usage_charts[UsageCpu], &system->usage[UsageCpu],
-	          UsageCpu, c->cpu_history, bar->metrics[UsageCpu], fg, accent);
-	bar_usage(f, &bar->usage_charts[UsageRam], &system->usage[UsageRam],
-	          UsageRam, c->ram_history, bar->metrics[UsageRam], fg, accent);
-	bar_load(f, system, bar->metrics[MetricLoad], fg, accent);
-}
-
 int
 shell_bar_metric(const ShellBar *bar)
 {
@@ -933,19 +946,35 @@ shell_bar_metric(const ShellBar *bar)
 }
 
 typedef struct {
-	int wanted, minimum, width, gap, x;
+	int wanted, minimum, width;
+} ItemSize;
+
+typedef struct {
+	int wanted, minimum, width, gap, x, priority;
 	float level;
 	enum BarAlign align;
 } BarSlot;
 
+static const enum BarItem item_priority[] = {
+	BarTags, BarTime, BarBattery, BarVolume, BarBrightness, BarCpu, BarRam, BarLoad,
+	BarLayout, BarDate, BarTray, BarStatus, BarTitle,
+};
+
 static void
-place_segments(const Config *c, BarSlot slots[BarSegmentCount], int w, int margin)
+place_segments(const Config *c, BarSlot slots[MAX_BAR_SEGMENTS], int w, int margin)
 {
-	/* Keep navigation and the clock legible as the available space shrinks. */
-	const enum BarSegment priority[] = {BarTags, BarDatetime, BarSystem, BarTray, BarStatus, BarTitle};
+	int order[MAX_BAR_SEGMENTS];
+	for (int i = 0; i < c->nsegments; ++i) {
+		int j = i;
+		while (j > 0 && slots[order[j-1]].priority > slots[i].priority) {
+			order[j] = order[j-1];
+			--j;
+		}
+		order[j] = i;
+	}
 	int free = w - 2*margin;
-	for (int i = 0; i < COUNT(priority); ++i) {
-		BarSlot *s = &slots[priority[i]];
+	for (int i = 0; i < c->nsegments; ++i) {
+		BarSlot *s = &slots[order[i]];
 		int width = roundf(s->minimum * s->level);
 		int gap = roundf(c->barseggap * s->level);
 		if (width && width + gap <= free) {
@@ -954,8 +983,8 @@ place_segments(const Config *c, BarSlot slots[BarSegmentCount], int w, int margi
 			free -= width + gap;
 		}
 	}
-	for (int i = 0; i < COUNT(priority); ++i) {
-		BarSlot *s = &slots[priority[i]];
+	for (int i = 0; i < c->nsegments; ++i) {
+		BarSlot *s = &slots[order[i]];
 		if (s->width) {
 			int extra = MIN(free, (int)roundf(s->wanted * s->level) - s->width);
 			s->width += extra;
@@ -965,7 +994,7 @@ place_segments(const Config *c, BarSlot slots[BarSegmentCount], int w, int margi
 
 	int widths[BarAlignCount] = {0}, trailing[BarAlignCount] = {0};
 	for (int i = 0; i < c->nsegments; ++i) {
-		const BarSlot *s = &slots[c->segments[i].segment];
+		const BarSlot *s = &slots[i];
 		if (s->width) {
 			widths[s->align] += s->width + s->gap;
 			trailing[s->align] = s->gap;
@@ -978,7 +1007,7 @@ place_segments(const Config *c, BarSlot slots[BarSegmentCount], int w, int margi
 	                     (widths[BarRight] ? trailing[BarCenter] : 0)));
 	int x[BarAlignCount] = {margin, center, right};
 	for (int i = 0; i < c->nsegments; ++i) {
-		BarSlot *s = &slots[c->segments[i].segment];
+		BarSlot *s = &slots[i];
 		if (s->width) {
 			s->x = x[s->align];
 			x[s->align] += s->width + s->gap;
@@ -986,30 +1015,150 @@ place_segments(const Config *c, BarSlot slots[BarSegmentCount], int w, int margi
 	}
 }
 
-void
+static void
+measure_segment(BarSlot *slot, const ItemSize items[BarItemCount], const BarPlacement *group)
+{
+	int count = 0;
+	unsigned used = 0;
+	for (int i = 0; i < group->count; ++i) {
+		enum BarItem item = group->items[i];
+		if (!items[item].wanted)
+			continue;
+		slot->minimum += items[item].minimum;
+		slot->wanted += items[item].wanted;
+		used |= 1u << item;
+		++count;
+	}
+	if (count) {
+		int padding = 2*GroupPadding + (count-1)*GroupGap;
+		slot->minimum += padding;
+		slot->wanted += padding;
+	}
+	for (slot->priority = 0; slot->priority < BarItemCount; ++slot->priority)
+		if (used & (1u << item_priority[slot->priority]))
+			break;
+}
+
+static void
+fit_items(ItemSize items[BarItemCount], const BarPlacement *group, int width)
+{
+	int free = width - 2*GroupPadding + GroupGap;
+	for (int i = 0; i < group->count; ++i) {
+		ItemSize *item = &items[group->items[i]];
+		if (item->wanted) {
+			item->width = item->minimum;
+			free -= item->width + GroupGap;
+		}
+	}
+	for (int i = 0; i < BarItemCount; ++i) {
+		ItemSize *item = &items[item_priority[i]];
+		if (item->width && free > 0) {
+			int extra = MIN(free, item->wanted - item->width);
+			item->width += extra;
+			free -= extra;
+		}
+	}
+}
+
+static void
+bar_item_draw(Frame *f, ShellBar *bar, const ShellBarModel *m, enum BarItem kind, cui_rect r,
+              const char *date, const char *clock, const ShellTimer *timer,
+              time_t now, double tick, int duration, cui_color bg, cui_color accent)
+{
+	const Config *c = f->config;
+	cui_color fg = c->palette[SchemeStatus][ColFg];
+	switch (kind) {
+	case BarTags:
+		bar_tags(f, bar, r, m, tick, duration);
+		break;
+	case BarLayout:
+		bar_layout(f, r, m->layout, bg, accent);
+		break;
+	case BarTitle: {
+		cui_color ink = c->palette[SchemeTitle][ColFg];
+		glyph(f, 41, r.x+1, r.y+(r.h-17)/2, 17, ActPalette, accent);
+		char title[256];
+		ellipsize(f, title, sizeof title, bar->title, r.w-24, f->size, medium);
+		label(f, 42, (cui_rect){r.x+24, r.y, r.w-24, r.h}, title,
+		      ink, f->size, medium, CUI_ALIGN_START);
+		if (m->title[0])
+			hit(f, r, ActPalette, 0);
+		break;
+	}
+	case BarStatus:
+		status_label(f, r, bar->status, 36, fg);
+		break;
+	case BarDate:
+	case BarTime: {
+		int is_time = kind == BarTime;
+		const char *text = is_time ? clock : date;
+		r.y += 2;
+		r.h -= 4;
+		int with_icon = r.w >= textwidth(f, text, f->size, mono) + 34;
+		bar_clock(f, r, text, is_time ? ActClock : ActCalendar,
+		          is_time ? 15 : 11, bg, fg, accent, with_icon);
+		if (is_time)
+			bar_time_progress(f, r, timer, now, tick, bg, accent);
+		break;
+	}
+	case BarTray: {
+		cui_rect strip = {r.x+r.w-m->tray_width, r.y, m->tray_width, r.h};
+		cui_rect available = group_rect(f, r);
+		cui_rect visible = group_rect(f, strip);
+		int left = MAX(available.x, visible.x);
+		bar->tray_x = f->group.x + strip.x;
+		bar->tray_clip_x = MAX(0, left - bar->tray_x);
+		bar->tray_clip_width = MAX(0, (int)MIN(available.x+available.w, visible.x+visible.w) - left);
+		break;
+	}
+	case BarCpu:
+	case BarRam: {
+		int metric = kind == BarCpu ? UsageCpu : UsageRam;
+		bar->metrics[metric] = group_rect(f, r);
+		bar_usage(f, &bar->usage_charts[metric], &m->system->usage[metric], metric,
+		          metric == UsageCpu ? c->cpu_history : c->ram_history, r, fg, accent);
+		break;
+	}
+	case BarLoad:
+		bar->metrics[MetricLoad] = group_rect(f, r);
+		bar_load(f, m->system, r, fg, accent);
+		break;
+	case BarBattery:
+	case BarVolume:
+	case BarBrightness: {
+		enum Control control = kind - BarBattery;
+		const ControlReading *data = &m->controls->reading[control];
+		int size = 22;
+		int level = control == ControlBattery ? data->level : controls_value(m->controls, control);
+		cui_rect symbol = {r.x+((int)r.w-size)/2, r.y+((int)r.h-size)/2, size, size};
+		level_icon(f, 1000+control*10, symbol, control, data, level, fg, bg, accent);
+		bar->metrics[MetricControl+control] = group_rect(f, r);
+		hit(f, r, ActBattery+control, 0);
+		break;
+	}
+	case BarItemCount:
+		break;
+	}
+}
+
+int
 shell_bar_draw(const ShellHost *host, const ShellFont *font, unsigned revision,
                const Config *c, ShellBar *bar, Window window, const ShellBarModel *m,
                const ShellTimer *timer, time_t now, double tick)
 {
-	int w = m->w, h = m->h, y = m->pad;
-	int height = h - 2*y;
-	double dt = bar->last_frame ? fmin(tick - bar->last_frame, 0.1) : 0;
+	int w = m->w, h = m->h, y = m->pad + m->slide;
+	int height = h - 2*m->pad;
+	double elapsed = bar->last_frame ? tick - bar->last_frame : 0;
 	if (w < 1 || height < 1
-	    || !begin(host, font, revision, &bar->surface, window, w, h, dt))
-		return;
+	    || !begin(host, font, revision, &bar->surface, window, w, h, fmin(elapsed, 0.1)))
+		return 0;
 
 	int duration = c->reduced_motion ? 0 : c->duration;
 	bar->animating = 0;
-	int tray_duration = host->shape && m->tray_width ? duration : 0;
-	float tray = reveal(bar, &bar->tray_reveal, m->tray_shown, tick, tray_duration);
-	float status = reveal(bar, &bar->status_reveal, !!m->status[0], tick, duration);
-	float title = reveal(bar, &bar->title_reveal, !!m->title[0], tick, duration);
 	if (m->status[0])
 		snprintf(bar->status, sizeof bar->status, "%s", m->status);
 	if (m->title[0])
 		snprintf(bar->title, sizeof bar->title, "%s", m->title);
-	bar->last_frame = tick;
-
 	ShellHit hover = shell_hit(bar->hits, bar->nhits, bar->hover_x, bar->hover_y);
 	int hovered = hover.action * (MAX_TAGS + 1) + hover.value;
 	if (bar->hovered != hovered) {
@@ -1018,125 +1167,156 @@ shell_bar_draw(const ShellHost *host, const ShellFont *font, unsigned revision,
 	}
 	float fade = duration ? fminf(1, (tick - bar->hover_since) * 1000 / duration) : 1;
 	Frame f = {bar->surface.ui, font, c, bar->hits, 0, COUNT(bar->hits),
-	           bar->hover_x, bar->hover_y, host->composited, fade, font->bar_size};
+	           bar->hover_x, bar->hover_y, host->composited, fade, font->bar_size, {0, 0, 0, 0}};
 	cui_set_reduced_motion(f.ui, c->reduced_motion != 0);
 	memset(bar->metrics, 0, sizeof bar->metrics);
-	cui_rect shapes[BarSegmentCount];
-	int n = 0;
+	bar->tray_clip_width = 0;
+	cui_rect shapes[MAX_BAR_SEGMENTS];
+	int n = 0, margin = MIN(c->barmargin, w / 8);
 	float radius = c->segradius, size = f.size;
-	cui_color fg = c->palette[SchemeStatus][ColFg];
 	cui_color accent = alpha(c->palette[SchemeSel][ColBg], 255);
 	cui_color outline = alpha(c->palette[SchemeNorm][ColBorder], 170);
 	cui_color status_bg = surface_color(&f, SchemeStatus), bar_bg = surface_color(&f, SchemeBar);
-
-	int margin = MIN(c->barmargin, w / 8);
 	cui_rect strip = {0, y, w, height};
 	if (bar_bg.a)
 		box(&f, 1, strip, 0, bar_bg, transparent, 0, 0);
+
 	struct tm local;
 	char date[80] = "", clock[40] = "";
 	if (localtime_r(&now, &local)) {
 		strftime(date, sizeof date, "%a %d %b", &local);
 		strftime(clock, sizeof clock, "%H:%M", &local);
 	}
-
-	int tags = tags_width(&f, m);
-	int titlew = title > 0 ? textwidth(&f, bar->title, size, medium) + 2*c->barpadx + 22 : 0;
-	int statusw = 0;
-	if (status > 0) {
-		char text[512];
-		cui_text_color_span spans[64];
-		status_parse(bar->status, text, spans, fg);
-		statusw = textwidth(&f, text, size, mono) + 2*c->barpadx;
-		if (title > 0)
-			statusw = MIN(statusw, w / 3);
-	}
-	int datetime = textwidth(&f, clock, size, mono) + textwidth(&f, date, size, mono) + 86;
-	int system = system_min_width + c->load_width - LoadMinWidth;
-	int tray_min = host->shape ? MIN(m->tray_width, 2*MAX(5, c->barpadx) + 16) : m->tray_width;
-	BarSlot slots[BarSegmentCount] = {
-		[BarTags] = {tags, MIN(tags, 40), .level = 1},
-		[BarTitle] = {titlew, titlew >= 54 ? 54 : 0, .level = title},
-		[BarStatus] = {statusw, MIN(statusw, 40), .level = status},
-		[BarSystem] = {system + 2*SystemGap + c->cpu_width + c->ram_width, system_min_width, .level = 1},
-		[BarDatetime] = {datetime, textwidth(&f, clock, size, mono) + 14, .level = 1},
-		[BarTray] = {m->tray_width, tray_min, .level = tray},
+	char status[512];
+	cui_text_color_span spans[64];
+	status_parse(bar->status, status, spans, c->palette[SchemeStatus][ColFg]);
+	int tags = tags_width(&f, m), title = bar->title[0] ? textwidth(&f, bar->title, size, medium) + 24 : 0;
+	int statusw = status[0] ? textwidth(&f, status, size, mono) : 0;
+	if (m->title[0])
+		statusw = MIN(statusw, w/3);
+	int dw = textwidth(&f, date, size, mono), cw = textwidth(&f, clock, size, mono);
+	ItemSize sizes[BarItemCount] = {
+		[BarTags] = {tags, MIN(tags, 32), 0},
+		[BarLayout] = {m->layout < 0 ? 0 : LayoutButtonWidth-6, m->layout < 0 ? 0 : 18, 0},
+		[BarTitle] = {title, MIN(38, title), 0},
+		[BarStatus] = {statusw, MIN(statusw, 24), 0},
+		[BarCpu] = {UsageIconSize+SystemGap+c->cpu_width, UsageIconSize, 0},
+		[BarRam] = {UsageIconSize+SystemGap+c->ram_width, UsageIconSize, 0},
+		[BarLoad] = {c->load_width, LoadMinWidth, 0},
+		[BarDate] = {dw+39, dw+6, 0},
+		[BarTime] = {cw+39, cw+6, 0},
+		[BarTray] = {m->tray_width, host->shape ? MIN(m->tray_width, 16) : m->tray_width, 0},
+		[BarBattery] = {24, 24, 0},
+		[BarVolume] = {24, 24, 0},
+		[BarBrightness] = {24, 24, 0},
 	};
-	unsigned placed = 0;
+	unsigned inactive = (!m->title[0] ? 1u<<BarTitle : 0) | (!m->status[0] ? 1u<<BarStatus : 0) |
+	                    (!m->tray_shown ? 1u<<BarTray : 0);
+	ItemSize current[BarItemCount];
+	memcpy(current, sizes, sizeof current);
+	for (int i = 0; i < BarItemCount; ++i)
+		if (inactive & (1u << i))
+			current[i] = (ItemSize){0};
+	BarSlot slots[MAX_BAR_SEGMENTS] = {0};
 	for (int i = 0; i < c->nsegments; ++i) {
-		BarPlacement p = c->segments[i];
-		slots[p.segment].align = !c->custom_segments && p.segment == BarTitle
-		                         ? (enum BarAlign)c->titlealign : p.align;
-		placed |= 1u << p.segment;
+		const BarPlacement *g = &c->segments[i];
+		BarSlot *s = &slots[i];
+		int item = g->items[0];
+		s->align = !c->custom_segments && g->count == 1 && item == BarTitle
+		           ? (enum BarAlign)c->titlealign : g->align;
+		measure_segment(s, g->count == 1 ? sizes : current, g);
+		int shown = s->wanted && !(m->hidden & (1u << i)) &&
+		            (g->count > 1 || !(inactive & (1u << item)));
+		int motion = duration;
+		if (!bar->last_frame)
+			motion = 0;
+		for (int j = 0; !host->shape && j < g->count; ++j)
+			if (g->items[j] == BarTray)
+				motion = 0;
+		s->level = shell_reveal(&bar->segment_reveal[i], shown, elapsed, motion);
+		bar->animating |= bar->segment_reveal[i].progress != shown;
 	}
-	for (int i = 0; i < BarSegmentCount; ++i)
-		if (!(placed & (1u << i)))
-			slots[i].level = 0;
+	bar->last_frame = tick;
 	place_segments(c, slots, w, margin);
 
-	if (!slots[BarTags].width)
-		bar->selected_w = 0;
+	int tags_drawn = 0;
 	for (int i = 0; i < c->nsegments; ++i) {
-		enum BarSegment kind = c->segments[i].segment;
-		const BarSlot *s = &slots[kind];
+		const BarSlot *s = &slots[i];
+		const BarPlacement *g = &c->segments[i];
 		if (!s->width)
 			continue;
 		cui_rect r = {s->x, y, s->width, height};
 		shapes[n++] = r;
-		switch (kind) {
-		case BarTags:
-			bar_tags(&f, bar, r, m, tick, duration, outline, accent);
-			break;
-		case BarTitle: {
-			cui_color ink = c->palette[SchemeTitle][ColFg], bg = surface_color(&f, SchemeTitle);
-			if (inside(r, f.hover_x, f.hover_y))
-				bg = blend(bg, ink, 0.1f * f.hover);
-			box(&f, 40, r, radius, bg, outline, bg.a != 0, 1);
-			int full = roundf(r.w / s->level);
-			clip(&f, 43, r);
-			glyph(&f, 41, 9, (height-17)/2, 17, ActPalette, accent);
-			label(&f, 42, (cui_rect){31, 0, full-31-c->barpadx, height}, bar->title,
-			      ink, size, medium, CUI_ALIGN_START);
+		cui_color bg = status_bg;
+		if (g->items[0] == BarTags || g->items[0] == BarLayout)
+			bg = surface_color(&f, SchemeNorm);
+		if (g->items[0] == BarTitle)
+			bg = surface_color(&f, SchemeTitle);
+		int id = 4000 + i*32;
+		box(&f, id, r, radius, bg, outline, bg.a != 0, 1);
+		int sliding = s->level < 1;
+		Frame child = f;
+		if (sliding) {
+			clip(&f, id+1, r);
+			child.group = r;
+			child.hover_x -= r.x;
+			child.hover_y -= r.y;
+		}
+		ItemSize items[BarItemCount];
+		cui_rect visible_charts[MetricControl] = {{0, 0, 0, 0}};
+		memcpy(items, g->count == 1 ? sizes : current, sizeof items);
+		int full = MAX(s->minimum, (int)roundf(r.w / s->level));
+		fit_items(items, g, full);
+		int x = GroupPadding + (sliding ? 0 : (int)r.x) + (s->align == BarRight ? r.w-full : 0);
+		int item_y = sliding ? 0 : r.y;
+		int drawn = 0;
+		for (int j = 0; j < g->count; ++j) {
+			enum BarItem kind = g->items[j];
+			int width = items[kind].width;
+			if (!width)
+				continue;
+			if (drawn++)
+				box(&child, id+2+j, (cui_rect){x-GroupGap/2-1, item_y+8, 1, height-16},
+				    0, outline, transparent, 0, 0);
+			cui_rect item = {x, item_y, width, height};
+			if (inside(item, child.hover_x, child.hover_y) &&
+			    kind != BarTags && kind != BarLayout && kind != BarDate && kind != BarTime && kind != BarTray)
+				box(&child, id+16+j, (cui_rect){x-2, item_y+3, width+4, height-6}, radius,
+				    blend(bg, c->palette[SchemeStatus][ColFg], 0.08f), transparent, 0, 0);
+			if (sliding && kind >= BarCpu && kind <= BarLoad)
+				visible_charts[kind-BarCpu] = group_rect(&child, item);
+			else
+				bar_item_draw(&child, bar, m, kind, item, date, clock, timer, now, tick, duration, bg, accent);
+			x += width + GroupGap;
+			tags_drawn |= kind == BarTags;
+		}
+		if (sliding) {
 			cui_end_box(f.ui);
-			if (m->title[0])
-				hit(&f, r, ActPalette, 0);
-			break;
+			for (int j = 0; j < MetricControl; ++j) {
+				cui_rect chart = visible_charts[j];
+				int minimum = j == MetricLoad ? LoadMinWidth : UsageIconSize;
+				if (chart.w >= minimum)
+					bar_item_draw(&f, bar, m, BarCpu+j, chart, date, clock, timer, now, tick, duration, bg, accent);
+			}
 		}
-		case BarStatus: {
-			box(&f, 35, r, radius, status_bg, outline, status_bg.a != 0, 1);
-			int full = roundf(r.w / s->level);
-			int shift = s->align == BarRight ? r.w - full : 0;
-			clip(&f, 37, r);
-			status_label(&f, (cui_rect){shift+c->barpadx, 0, full-2*c->barpadx, height},
-			             bar->status, 36, fg);
-			cui_end_box(f.ui);
-			break;
-		}
-		case BarDatetime:
-			bar_datetime(&f, r, date, clock, timer, now, tick, outline, accent);
-			break;
-		case BarTray:
-			box(&f, 2, r, radius, alpha(status_bg, 255), outline, 1, 1);
-			break;
-		case BarSystem:
-			bar_system(&f, bar, r, m->system, outline, accent);
-			break;
-		case BarSegmentCount:
-			break;
-		}
+		f.nhits = child.nhits;
 	}
+	if (!tags_drawn)
+		bar->selected_w = 0;
 	bar->animating |= hovered && fade < 1;
 	if (render(host, &bar->surface)) {
-		bar->tray_x = slots[BarTray].x;
-		bar->tray_width = slots[BarTray].width;
 		bar->nhits = f.nhits;
 		if (bar_bg.a)
-			shape(host, &bar->surface, window, w, h, &strip, 1, 0, 0, 1);
+			shape(host, &bar->surface, window, w, h, &strip, 1, 0, 0, 1, m->clip_top, m->clip_bottom);
 		else
-			shape(host, &bar->surface, window, w, h, shapes, n, radius, host->composited ? y : 0, 1);
-		/* Expand the drawable region before presenting newly visible pixels. */
+			shape(host, &bar->surface, window, w, h, shapes, n, radius, host->composited ? m->pad : 0, 1,
+			      m->clip_top, m->clip_bottom);
+		if (m->map)
+			XMapRaised(host->dpy, window);
 		blit(host, &bar->surface, window);
+		return 1;
 	}
+	return 0;
 }
 
 void
@@ -1159,16 +1339,20 @@ shell_tooltip_close(const ShellHost *host, ShellTooltip *tip)
 void
 shell_tooltip_draw(const ShellHost *host, const ShellFont *font, unsigned revision,
                    const Config *c, ShellTooltip *tip, const ShellSystem *system,
-                   int metric, cui_rect monitor, cui_rect anchor)
+                   const Controls *controls, int metric, cui_rect monitor, cui_rect anchor)
 {
 	const int padding = 11, gap = 6;
 	int load = metric == MetricLoad;
+	int kind = metric - MetricControl;
+	const char *name = kind >= 0 ? control_name[kind] : metric_name[metric];
+	const ControlReading *reading = kind >= 0 ? &controls->reading[kind] : NULL;
 	float size = fmaxf(11, font->size - 3);
 	Frame f = {.font = font, .config = c, .composite = host->composited, .size = size};
 	int pad = host->composited && c->shadows && c->shadow_opacity ? 4*c->bar_shadow_blur : 0;
 	int row = ceilf(size) + 8;
-	int width = load ? 13*size : textwidth(&f, metric_name[metric], size, medium) +
-	            textwidth(&f, "100%", size, mono) + 2*padding + 14;
+	const char *example = reading && !reading->available ? "Unavailable" : "100%";
+	int width = load ? 13*size : textwidth(&f, name, size, medium) +
+	            textwidth(&f, example, size, mono) + 2*padding + 14;
 	int height = (load ? 3*row : row) + 12;
 	int w = width + 2*pad, h = height + 2*pad;
 	if (w > monitor.w || h + anchor.h + gap > monitor.h) {
@@ -1204,7 +1388,7 @@ shell_tooltip_draw(const ShellHost *host, const ShellFont *font, unsigned revisi
 	cui_rect body = {pad, pad, width, height};
 	box(&f, 1, body, c->panelradius, alpha(bg, host->composited ? c->panel_opacity : 255), outline, 1, 1);
 	int inner = width - 2*padding;
-	label(&f, 2, (cui_rect){pad+padding, pad+6, inner, row}, metric_name[metric],
+	label(&f, 2, (cui_rect){pad+padding, pad+6, inner, row}, name,
 	      fg, size, medium, CUI_ALIGN_START);
 	if (load) {
 		static const char *period[] = {"1 min", "5 min", "15 min"};
@@ -1222,6 +1406,13 @@ shell_tooltip_draw(const ShellHost *host, const ShellFont *font, unsigned revisi
 			label(&f, 4+i*2, (cui_rect){xx, pad+6+2*row, col, row}, text,
 			      value_color, size, mono, CUI_ALIGN_CENTER);
 		}
+	} else if (reading) {
+		char text[20] = "Unavailable";
+		int value = kind == ControlBattery ? reading->level : controls_value(controls, kind);
+		if (reading->available)
+			snprintf(text, sizeof text, "%d%%", reading->muted ? 0 : value);
+		label(&f, 3, (cui_rect){pad+padding, pad+6, inner, row}, text,
+		      reading->available ? control_color(c, kind, value, accent) : muted, size, mono, CUI_ALIGN_END);
 	} else {
 		char text[8] = "–";
 		const cui_chart_datum *latest = latest_usage(&system->usage[metric]);
@@ -1231,13 +1422,26 @@ shell_tooltip_draw(const ShellHost *host, const ShellFont *font, unsigned revisi
 		      latest ? usage_color(c, accent, latest->value) : muted, size, mono, CUI_ALIGN_END);
 	}
 	if (render(host, &tip->surface)) {
-		shape(host, &tip->surface, tip->win, w, h, &body, 1, c->panelradius, pad, 0);
+		shape(host, &tip->surface, tip->win, w, h, &body, 1, c->panelradius, pad, 0, 0, h);
 		if (!tip->mapped)
 			XMapRaised(dpy, tip->win);
 		blit(host, &tip->surface, tip->win);
 		tip->mapped = 1;
 		tip->dirty = 0;
 	}
+}
+
+int
+shell_panel_control(enum ShellAction action)
+{
+	return action >= ActBattery && action <= ActBrightness ? (int)action - ActBattery : -1;
+}
+
+void
+shell_panel_pointer(ShellPanel *p, cui_event_type type, int x, int y)
+{
+	if (p->surface.ui)
+		cui_queue_event(p->surface.ui, (cui_event){.type = type, .x = x, .y = y});
 }
 
 void
@@ -1255,12 +1459,13 @@ shell_panel_open(const ShellHost *host, const Config *config, ShellPanel *panel,
                  enum ShellAction kind, int monitor, int x, int y, int w, int h,
                  int by, int bh, float anchor, Time event_time)
 {
-	if (w < 210 || h < 160)
+	int control = shell_panel_control(kind);
+	if (w < 210 || h < (control >= 0 ? 100 : 160))
 		return 0;
 	shell_panel_close(host, panel);
 	int pad = host->composited && config->shadows && config->shadow_opacity
 	          ? 4 * config->panel_shadow_blur : 0;
-	int width = MIN(kind == ActPalette ? config->palette_width
+	int width = MIN(control >= 0 ? config->controls_width : kind == ActPalette ? config->palette_width
 	                : kind == ActClock ? config->clock_width : config->calendar_width, w - 12 - 2*pad);
 	const int separation = 7;
 	int bar_inset = shell_bar_inset(config);
@@ -1272,9 +1477,9 @@ shell_panel_open(const ShellHost *host, const Config *config, ShellPanel *panel,
 	int timer_presets = (config->nin_presets || config->at_presets) && available - 2*pad >= 326;
 	int clock_base = timer_presets ? 286 : 246;
 	int zone_rows = MAX(1, MIN(config->nzones + 1, (available - clock_base - 2*pad)/40));
-	int height = kind == ActCalendar ? 364 : kind == ActPalette ? 420 : clock_base + zone_rows*40;
+	int height = control >= 0 ? 113 : kind == ActCalendar ? 364 : kind == ActPalette ? 420 : clock_base + zone_rows*40;
 	height = MIN(height, available - 2*pad);
-	if (height < (kind == ActClock ? 280 : kind == ActCalendar ? 240 : 160))
+	if (height < (control >= 0 ? 100 : kind == ActClock ? 280 : kind == ActCalendar ? 240 : 160))
 		return 0;
 	int px = kind == ActPalette ? x + (w - width)/2 - pad : anchor - width/2 - pad;
 	int margin = MIN(config->barmargin, (w - width)/2);
@@ -1288,11 +1493,11 @@ shell_panel_open(const ShellHost *host, const Config *config, ShellPanel *panel,
 	*panel = (ShellPanel){.kind = kind, .monitor = monitor, .width = width,
 	                      .height = height, .pad = pad, .year = local.tm_year+1900, .month = local.tm_mon,
 	                      .zone_rows = zone_rows, .timer_presets = timer_presets,
-	                      .hover_x = -1, .hover_y = -1,
+	                      .hover_x = -1, .hover_y = -1, .control_request = -1,
 	                      .opened = shell_seconds()};
 	XSetWindowAttributes attrs = {
 		.override_redirect = True, .background_pixel = 0, .border_pixel = 0, .colormap = host->cmap,
-		.event_mask = ExposureMask | ButtonPressMask | PointerMotionMask | KeyPressMask,
+		.event_mask = ExposureMask | ButtonPressMask | ButtonReleaseMask | PointerMotionMask | KeyPressMask,
 	};
 	Display *dpy = host->dpy;
 	panel->win = XCreateWindow(dpy, host->root, px, py, width+2*pad, height+2*pad,
@@ -1301,10 +1506,10 @@ shell_panel_open(const ShellHost *host, const Config *config, ShellPanel *panel,
 	                           &attrs);
 	XClassHint klass = {"mwm-panel", "mwm"};
 	XSetClassHint(dpy, panel->win, &klass);
-	XStoreName(dpy, panel->win, kind == ActCalendar ? "mwm calendar"
+	XStoreName(dpy, panel->win, control >= 0 ? control_name[control] : kind == ActCalendar ? "mwm calendar"
 	           : kind == ActClock ? "mwm clock" : "mwm command palette");
 	XMapRaised(dpy, panel->win);
-	int pointer = XGrabPointer(dpy, panel->win, False, ButtonPressMask | PointerMotionMask,
+	int pointer = XGrabPointer(dpy, panel->win, False, ButtonPressMask | ButtonReleaseMask | PointerMotionMask,
 	                           GrabModeAsync, GrabModeAsync, None, None, event_time);
 	int keyboard = XGrabKeyboard(dpy, panel->win, False, GrabModeAsync, GrabModeAsync, event_time);
 	if (pointer != GrabSuccess || keyboard != GrabSuccess) {
@@ -1541,16 +1746,78 @@ palette(Frame *f, const ShellPanel *p, const ShellEntry *entries, int count,
 	      muted, f->size-2, mono, CUI_ALIGN_START);
 }
 
+static void
+request_control(void *user, const cui_component_slider_request *request)
+{
+	ShellPanel *panel = user;
+	if (request->phase == CUI_SLIDER_COMMIT)
+		panel->control_request = (int)round(request->requested);
+}
+
+static void
+control_panel(Frame *f, ShellPanel *p, const Controls *controls, enum Control kind,
+              cui_color fg, cui_color bg, cui_color muted, cui_color accent)
+{
+	const ControlReading *data = &controls->reading[kind];
+	int battery = kind == ControlBattery;
+	int value = controls_value(controls, kind);
+	int floor = battery && data->limit < 0 ? 0 : data->minimum;
+	int adjustable = data->available && data->adjustable && floor < 100;
+	float x = p->pad, y = p->pad, w = p->width;
+	float track_y = y + MIN(52, p->height-53);
+	cui_rect track = {x+17, track_y, w-34, 28};
+	int bounded = MAX(floor, MIN(100, value));
+	cui_theme theme = cui_theme_dark();
+	theme.radius = 4;
+	cui_begin_absolute_box(f->ui, 113, (cui_box){.width = track.w, .height = track.h}, track);
+	cui_slider_events(f->ui, 114, &theme, cui_string(battery ? "Charging limit" : control_name[kind]),
+	                  bounded, &p->slider,
+	                  (cui_slider_options){.minimum = floor, .maximum = 100, .step = 1,
+	                                       .disabled = !adjustable},
+	                  (cui_slider_style_options){.width = track.w, .track_height = 7, .hit_height = track.h,
+	                                             .hide_label = true, .custom_colors = true,
+	                                             .track_color = alpha(fg, 36), .fill_color = accent},
+	                  (cui_component_slider_handler){request_control, p});
+	cui_end_box(f->ui);
+	int shown = p->slider.dragging ? (int)p->slider.preview : value;
+	if (adjustable) {
+		float xx = track.x + track.w * (MAX(floor, shown)-floor) / (100-floor);
+		box(f, 115, (cui_rect){xx-5, track.y+9, 10, 10}, 5, fg, bg, 1, 0);
+	}
+	int level = battery ? data->level : shown;
+	level_icon(f, 130, (cui_rect){x+15, y+16, 22, 22}, kind, data, level, fg, bg, accent);
+	label(f, 111, (cui_rect){x+45, y+12, w-105, 30}, control_name[kind], fg, f->size, medium, CUI_ALIGN_START);
+	char text[18] = "–";
+	if (data->available)
+		snprintf(text, sizeof text, "%d%%", level);
+	label(f, 112, (cui_rect){x+w-76, y+12, 59, 30}, text,
+	      data->available ? control_color(f->config, kind, level, accent) : muted,
+	      f->size, mono, CUI_ALIGN_END);
+	char status[80] = "";
+	if (data->failed)
+		snprintf(status, sizeof status, "Could not change %s", battery ? "charging limit" : control_name[kind]);
+	else if (!data->available)
+		snprintf(status, sizeof status, "%s unavailable", control_name[kind]);
+	else if (battery && data->limit >= 0)
+		snprintf(status, sizeof status, "Charge limit %d%%%s", shown, adjustable ? "" : " · Read-only");
+	else if (battery)
+		snprintf(status, sizeof status, "%s", data->detail[0] ? data->detail : "Charge level");
+	else if (data->muted)
+		snprintf(status, sizeof status, "Muted");
+	label(f, 116, (cui_rect){x+17, track.y+track.h, w-34, 22}, status, muted,
+	      MAX(11, f->size-4), regular, CUI_ALIGN_START);
+}
+
 int
 shell_panel_draw(const ShellHost *host, const ShellFont *font, unsigned revision,
                  const Config *c, ShellPanel *p, const ShellTimer *timer,
-                 const ShellEntry *entries, int count, time_t now, double tick)
+                 const Controls *controls, const ShellEntry *entries, int count, time_t now, double tick)
 {
 	int w = p->width+2*p->pad, h = p->height+2*p->pad;
 	if (!p->win || !begin(host, font, revision, &p->surface, p->win, w, h, 0.016))
 		return 0;
 	Frame f = {p->surface.ui, font, c, p->hits, 0, COUNT(p->hits),
-	           p->hover_x, p->hover_y, host->composited, 1, font->size};
+	           p->hover_x, p->hover_y, host->composited, 1, font->size, {0, 0, 0, 0}};
 	cui_set_reduced_motion(f.ui, c->reduced_motion != 0);
 	cui_color fg = c->palette[SchemeStatus][ColFg], bg = alpha(c->palette[SchemeStatus][ColBg], 255);
 	cui_color accent = alpha(c->palette[SchemeSel][ColBg], 255), ink = c->palette[SchemeSel][ColFg];
@@ -1568,7 +1835,10 @@ shell_panel_draw(const ShellHost *host, const ShellFont *font, unsigned revision
 	box(&f, 100, animated, radius, alpha(bg, opacity * (0.92f+0.08f*t)), outline, 1, 2);
 	struct tm local = {0};
 	localtime_r(&now, &local);
-	if (p->kind == ActCalendar)
+	int control = shell_panel_control(p->kind);
+	if (control >= 0)
+		control_panel(&f, p, controls, control, fg, bg, muted, accent);
+	else if (p->kind == ActCalendar)
 		calendar(&f, p, &local, fg, muted, accent, ink, card);
 	else if (p->kind == ActClock)
 		world_clock(&f, p, timer, &local, now, tick, fg, muted, accent, ink, card, outline);
@@ -1576,7 +1846,7 @@ shell_panel_draw(const ShellHost *host, const ShellFont *font, unsigned revision
 		palette(&f, p, entries, count, fg, muted, accent, ink, card, outline);
 	if (render(host, &p->surface)) {
 		p->nhits = f.nhits;
-		shape(host, &p->surface, p->win, w, h, &body, 1, radius, p->pad, 1);
+		shape(host, &p->surface, p->win, w, h, &body, 1, radius, p->pad, 1, 0, h);
 		blit(host, &p->surface, p->win);
 	}
 	return t < 1;

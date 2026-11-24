@@ -17,7 +17,7 @@ _mwmc()
         cword=$COMP_CWORD
     fi
 
-    local verbs="focus move swap layout master gap bar traybar win query palette reload restart quit version help kill completions"
+    local verbs="focus move swap layout master gap bar traybar segment win query palette reload restart quit version help kill completions"
 
     # top-level verb
     if [ "$cword" -eq 1 ]; then
@@ -64,6 +64,11 @@ _mwmc()
         [ "$cword" -eq 2 ] && COMPREPLY=( $(compgen -W "+5 -5" -- "$cur") ) ;;
     bar|traybar)
         [ "$cword" -eq 2 ] && COMPREPLY=( $(compgen -W "toggle show hide" -- "$cur") ) ;;
+    segment)
+        case "$cword" in
+        2) COMPREPLY=( $(compgen -W "list toggle show hide" -- "$cur") ) ;;
+        3) [ "$sub" != list ] && COMPREPLY=( $(compgen -W "$(mwmc segment list 2>/dev/null | cut -d' ' -f1)" -- "$cur") ) ;;
+        esac ;;
     win)
         case "$cword" in
         2) COMPREPLY=( $(compgen -W "close tag toggle move resize center" -- "$cur") ) ;;

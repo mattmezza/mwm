@@ -10,11 +10,15 @@ enum { MAX_USAGE_SAMPLES = 120, MAX_USAGE_WIDTH = 200 };
 enum { UsageWarning, UsageDanger, UsageColorCount };
 enum { SchemeNorm, SchemeSel, SchemeUrg, SchemeTitle, SchemeStatus, SchemeBar, SchemeLast };
 enum { ColFg, ColBg, ColBorder };
-enum BarSegment { BarTags, BarTitle, BarStatus, BarSystem, BarDatetime, BarTray, BarSegmentCount };
+enum BarItem { BarTags, BarLayout, BarTitle, BarStatus, BarCpu, BarRam, BarLoad, BarDate, BarTime,
+               BarTray, BarBattery, BarVolume, BarBrightness, BarItemCount };
+enum { MAX_BAR_SEGMENTS = BarItemCount, SEGMENT_NAME = 32 };
 enum BarAlign { BarLeft, BarCenter, BarRight, BarAlignCount };
 
 typedef struct {
-	enum BarSegment segment;
+	char name[SEGMENT_NAME];
+	enum BarItem items[BarItemCount];
+	int count;
 	enum BarAlign align;
 } BarPlacement;
 
@@ -33,11 +37,14 @@ typedef struct {
 	float mfact;
 	int topbar, showbar, barheight, barvertpad, barpadx, barmargin, barvmargin;
 	int barseggap, segradius, tagradius, titlealign, barfontsize;
-	BarPlacement segments[BarSegmentCount];
+	BarPlacement segments[MAX_BAR_SEGMENTS];
 	int nsegments, custom_segments;
 	int timerprogressheight;
 	int cpu_interval, cpu_history, cpu_width, ram_history, ram_width;
 	int load_width, tooltip_delay;
+	int controls_interval, battery_low, battery_critical, battery_step, volume_step, brightness_step;
+	int brightness_min, controls_width;
+	char battery_device[64], backlight_device[64], audio_sink[64];
 	int showsystray, showtraybar, systraymon, systrayspacing, systrayvertpad;
 	int panelradius, panel_opacity, calendar_width, clock_width, palette_width;
 	int duration, reduced_motion, shadows, shadow_opacity, bar_shadow_blur, panel_shadow_blur;
@@ -62,6 +69,7 @@ int config_read(Config *config, const char *path, int required, char error[CONFI
 int config_theme(Config *config, Display *dpy, Window root, Colormap cmap,
                  char error[CONFIG_ERROR]);
 int config_tag(const Config *config, const char *value);
+int config_segment(const Config *config, const char *name);
 int config_zone_time(const char *zone, time_t now, struct tm *out);
 
 #endif

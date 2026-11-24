@@ -94,7 +94,7 @@ struct Monitor {
 	Client *sel;          /* last focused client on this monitor */
 	Window barwin;
 	ShellBar bar;
-	int bardirty;
+	int bardirty, barmapped;
 	Monitor *next;
 };
 
@@ -109,7 +109,8 @@ typedef struct {
 typedef struct Systray {
 	Window win;
 	Client *icons;
-	int monitor, x, y, width, height, clip_width, mapped;
+	int monitor, x, y, width, height, mapped;
+	XRectangle clip;
 	unsigned long bg;
 } Systray;
 
@@ -246,7 +247,7 @@ static int updategeom(int initial);
 static void updatesizehints(Client *c);
 static void updatestatus(void);
 static void updatesystray(void);
-static void painttray(int segment_width);
+static void painttray(XRectangle clip);
 static void updatesystrayicongeom(Client *i, int w, int h);
 static void updatesystrayiconstate(Client *i, XPropertyEvent *ev);
 static void updatetitle(Client *c);
@@ -325,6 +326,8 @@ static ShellPanel panel;
 static ShellTooltip tooltip;
 static ShellTimer timer;
 static ShellSystem system_stats;
+static Controls controls;
+static unsigned hidden_segments;
 static double system_next;
 static unsigned int theme_revision;
 static const char *config_path;
@@ -337,8 +340,16 @@ static const char *layoutsym[] = { "|||", "||=", "><>" };
 
 static const char *reloadstyle(void);
 static void openpanel(Monitor *, enum ShellAction, float anchor, Time);
+static void adjust_control(int kind, int direction);
 static void panel_event(XEvent *);
 static int ui_tick(void);
+
+static int
+panel_action(enum ShellAction action)
+{
+	return action == ActCalendar || action == ActClock || action == ActPalette ||
+	       shell_panel_control(action) >= 0;
+}
 
 /* ---- small helpers --------------------------------------------------- */
 
@@ -1130,15 +1141,39 @@ setgap(const char *arg)
 
 static int barvisible = 1;
 static int systrayvisible = 1;
+static ShellReveal whole_bar = {.progress = 1, .shown = 1};
+static float bar_level = 1;
+static double bar_tick;
+
+static void
+animate_bar(double tick)
+{
+	int duration = shapeext && !settings.reduced_motion ? settings.duration : 0;
+	float previous = bar_level;
+	bar_level = shell_reveal(&whole_bar, barvisible, bar_tick ? tick-bar_tick : 0, duration);
+	bar_tick = tick;
+	if (previous != bar_level)
+		drawbars();
+	if (previous > 0 && bar_level == 0 && !barvisible) {
+		updatebars();
+		if (systray)
+			painttray((XRectangle){0});
+		arrange(NULL);
+	}
+}
 
 void
 togglebar(void)
 {
+	double tick = shell_seconds();
+	animate_bar(tick);
 	barvisible = !barvisible;
-	if (!barvisible)
+	animate_bar(tick);
+	if (!barvisible) {
 		shell_panel_close(&shell, &panel);
+		shell_tooltip_hide(&shell, &tooltip);
+	}
 	updatebars();
-	updatesystray();
 	arrange(NULL);
 	drawbars();
 }
@@ -1625,16 +1660,21 @@ static void
 paintbar(Monitor *m, time_t now, double tick)
 {
 	m->bardirty = 0;
-	if (!barvisible)
+	if (!bar_level)
 		return;
 	int owns_tray = systray && systray->monitor == m->num;
-	int tray_width = owns_tray && systray->width ? systray->width + 2*(lrpad / 2) : 0;
+	int tray_width = owns_tray ? systray->width : 0;
+	int inset = shell_bar_inset(&settings);
+	int distance = settings.topbar ? m->by+bh-m->my : m->my+m->mh-m->by;
+	int slide = roundf((settings.topbar ? -1 : 1) * distance * (1-bar_level));
 	ShellBarModel state = {
-		.w = m->mw, .h = bh,
-		.pad = shell_bar_inset(&settings),
+		.w = m->mw, .h = bh, .slide = slide, .map = !m->barmapped,
+		.pad = inset,
+		.clip_top = MAX(0, m->my-m->by), .clip_bottom = MIN(bh, m->my+m->mh-m->by),
 		.tray_width = tray_width, .tray_shown = tray_width && systrayvisible && settings.showsystray,
 		.tag = m->seltag, .layout = m->seltag < 0 ? -1 : tagstate[m->seltag].layout,
 		.title = m->sel ? m->sel->name : "", .status = stext, .system = &system_stats,
+		.controls = &controls, .hidden = hidden_segments,
 	};
 	int urgency[MAX_TAGS] = {0}, occupancy[MAX_TAGS] = {0};
 	for (Client *c = clients; c; c = c->next) {
@@ -1649,21 +1689,24 @@ paintbar(Monitor *m, time_t now, double tick)
 		tag->urgent = urgency[i];
 		taglabel(i, tag->label, sizeof tag->label);
 	}
-	shell_bar_draw(&shell, &shellfont, theme_revision, &settings, &m->bar,
-	               m->barwin, &state, &timer, now, tick);
+	if (!shell_bar_draw(&shell, &shellfont, theme_revision, &settings, &m->bar,
+	                    m->barwin, &state, &timer, now, tick))
+		return;
+	m->barmapped = 1;
 	if (tooltip.mapped && shell_bar_metric(&m->bar) != MetricNone)
 		tooltip.dirty = 1;
-	if (owns_tray && m->bar.tray_width) {
-		int x = m->mx + m->bar.tray_x + m->bar.tray_width - lrpad/2 - systray->width;
-		int y = m->by + state.pad + settings.systrayvertpad;
+	if (owns_tray) {
+		int x = m->mx + m->bar.tray_x;
+		int y = m->by + inset + slide + settings.systrayvertpad;
+		int top = MAX(0, m->my-y);
+		int bottom = MIN(systray->height, m->my+m->mh-y);
 		if (x != systray->x || y != systray->y) {
 			systray->x = x;
 			systray->y = y;
 			XMoveWindow(dpy, systray->win, x, y);
 		}
+		painttray((XRectangle){m->bar.tray_clip_x, top, m->bar.tray_clip_width, MAX(0, bottom-top)});
 	}
-	if (owns_tray)
-		painttray(m->bar.tray_width);
 }
 
 void
@@ -1679,18 +1722,14 @@ updatebarpos(Monitor *m)
 {
 	m->wy = m->my;
 	m->wh = m->mh;
-	if (barvisible) {
-		int inset = shell_bar_inset(&settings);
-		int reserved = bh - 2*inset + settings.barvmargin;
+	int inset = shell_bar_inset(&settings);
+	int reserved = bh - 2*inset + settings.barvmargin;
+	m->by = settings.topbar ? m->my + settings.barvmargin - inset
+	                         : m->my + m->mh - reserved - inset;
+	if (barvisible || bar_level > 0) {
 		m->wh = MAX(1, m->wh - reserved);
-		if (settings.topbar) {
-			m->by = m->my + settings.barvmargin - inset;
+		if (settings.topbar)
 			m->wy = m->my + reserved;
-		} else {
-			m->by = m->my + m->mh - reserved - inset;
-		}
-	} else {
-		m->by = -bh;
 	}
 }
 
@@ -1740,10 +1779,13 @@ buttonpress(XEvent *e)
 		}
 		return;
 	}
-	if (m && ev->window == m->barwin) {
+	if (m && ev->window == m->barwin && barvisible) {
 		ShellHit hit = shell_hit(m->bar.hits, m->bar.nhits, ev->x, ev->y);
 		selmon = m;
-		if ((ev->button == Button4 || ev->button == Button5) &&
+		int control = shell_panel_control(hit.action);
+		if (control >= 0 && (ev->button == Button4 || ev->button == Button5)) {
+			adjust_control(control, ev->button == Button4 ? 1 : -1);
+		} else if ((ev->button == Button4 || ev->button == Button5) &&
 		    (hit.action == ActTag || hit.action == ActLayout)) {
 			viewtag(ev->button == Button4 ? "prev" : "next");
 		} else if (hit.action == ActLayout && (ev->button == Button1 || ev->button == Button3)) {
@@ -1752,8 +1794,7 @@ buttonpress(XEvent *e)
 			char tag[16];
 			snprintf(tag, sizeof tag, "%d", (int)hit.value + 1);
 			viewtag(tag);
-		} else if (ev->button == Button1 &&
-		           (hit.action == ActClock || hit.action == ActCalendar || hit.action == ActPalette)) {
+		} else if (ev->button == Button1 && panel_action(hit.action)) {
 			openpanel(m, hit.action, m->mx + hit.rect.x + hit.rect.w / 2, ev->time);
 		}
 	}
@@ -2203,6 +2244,32 @@ dispatchcmd(int argc, char **argv, char *reply, size_t rsz)
 		else if (EQ(noun, "show")) { if (!systrayvisible) toggletraybar(); }
 		else if (EQ(noun, "hide")) { if (systrayvisible) toggletraybar(); }
 		else { snprintf(reply, rsz, "error: traybar toggle|show|hide"); return; }
+	} else if (EQ(verb, "segment")) {
+		if (argc == 2 && EQ(noun, "list")) {
+			size_t n = 0;
+			for (int i = 0; i < settings.nsegments; ++i)
+				n += snprintf(reply+n, rsz-n, "%s %s\n", settings.segments[i].name,
+				              hidden_segments & (1u << i) ? "hidden" : "shown");
+			return;
+		}
+		int index = argc == 3 ? config_segment(&settings, ARG(2)) : -1;
+		if (index < 0 || !(EQ(noun, "show") || EQ(noun, "hide") || EQ(noun, "toggle"))) {
+			snprintf(reply, rsz, "error: segment list | show|hide|toggle <configured segment>");
+			return;
+		}
+		unsigned bit = 1u << index;
+		if (EQ(noun, "toggle")) hidden_segments ^= bit;
+		if (EQ(noun, "show")) hidden_segments &= ~bit;
+		if (EQ(noun, "hide")) hidden_segments |= bit;
+		if (panel.win && (hidden_segments & bit)) {
+			enum BarItem item = panel.kind == ActCalendar ? BarDate : panel.kind == ActClock ? BarTime
+			                    : panel.kind == ActPalette ? BarTitle : BarBattery + shell_panel_control(panel.kind);
+			const BarPlacement *group = &settings.segments[index];
+			for (int i = 0; i < group->count; ++i)
+				if (group->items[i] == item)
+					shell_panel_close(&shell, &panel);
+		}
+		drawbars();
 	} else if (EQ(verb, "win")) {
 		if (EQ(noun, "close")) killfocused();
 		else if (EQ(noun, "move")) {
@@ -2294,6 +2361,7 @@ dispatchcmd(int argc, char **argv, char *reply, size_t rsz)
 		    "  master +1|-1|<n> | master ratio +0.05|-0.05|<f>\n"
 		    "  gap +5|-5|<px> | bar toggle|show|hide\n"
 		    "  traybar toggle|show|hide\n"
+		    "  segment list | show|hide|toggle <name>\n"
 		    "  win close | win tag <name> | win toggle float|full|sticky\n"
 		    "  win move <dx> <dy> | win resize <dw> <dh> | win center\n"
 		    "  query tags|windows|monitors|layout|state\n"
@@ -2511,23 +2579,21 @@ updateclientlist(void)
 /* Clip the XEmbed strip to the tray segment as it opens or closes.
  * Only its container is unmapped. The icon windows stay docked and mapped. */
 static void
-painttray(int segment_width)
+painttray(XRectangle clip)
 {
-	int visible = MIN(systray->width, MAX(0, segment_width - lrpad/2));
-	if (!visible) {
+	if (!clip.width || !clip.height ||
+	    (!shapeext && (clip.width != systray->width || clip.height != systray->height))) {
 		if (systray->mapped)
 			XUnmapWindow(dpy, systray->win);
 		systray->mapped = 0;
 		return;
 	}
-	if (shapeext && visible != systray->clip_width) {
-		if (visible == systray->width)
+	if (shapeext && memcmp(&clip, &systray->clip, sizeof clip)) {
+		if (clip.width == systray->width && clip.height == systray->height)
 			XShapeCombineMask(dpy, systray->win, ShapeBounding, 0, 0, None, ShapeSet);
-		else {
-			XRectangle clip = {systray->width - visible, 0, visible, systray->height};
+		else
 			XShapeCombineRectangles(dpy, systray->win, ShapeBounding, 0, 0, &clip, 1, ShapeSet, Unsorted);
-		}
-		systray->clip_width = visible;
+		systray->clip = clip;
 	}
 	if (!systray->mapped) {
 		XMapRaised(dpy, systray->win);
@@ -2680,7 +2746,7 @@ updatesystray(void)
 	}
 	if (systray->monitor != m->num) {
 		systray->monitor = m->num;
-		painttray(0);
+		painttray((XRectangle){0});
 		drawbars();
 	}
 
@@ -2693,7 +2759,7 @@ updatesystray(void)
 	int inset = shell_bar_inset(&settings) + settings.systrayvertpad;
 	int height = MAX(1, bh - 2*inset);
 	if (systray->width != w || systray->height != height)
-		systray->clip_width = -1;
+		systray->clip = (XRectangle){0};
 	systray->width = w;
 	systray->height = height;
 	if (systray->bg != traybg) {
@@ -2701,8 +2767,8 @@ updatesystray(void)
 		XClearWindow(dpy, systray->win);
 		systray->bg = traybg;
 	}
-	if (!w || !barvisible || !settings.showsystray)
-		painttray(0);
+	if (!w || (!barvisible && !bar_level) || !settings.showsystray)
+		painttray((XRectangle){0});
 	else {
 		XResizeWindow(dpy, systray->win, w, height);
 		if (systray->mapped)
@@ -3097,11 +3163,11 @@ updatebars(void)
 			XChangeProperty(dpy, m->barwin, netatom[NetWMWindowType], XA_ATOM, 32,
 			                PropModeReplace, (unsigned char *)&netatom[NetWMWindowTypeDock], 1);
 		}
-		if (barvisible) {
-			XMoveResizeWindow(dpy, m->barwin, m->mx, m->by, m->mw, bh);
-			XMapRaised(dpy, m->barwin);
-		} else
+		XMoveResizeWindow(dpy, m->barwin, m->mx, m->by, m->mw, bh);
+		if (!bar_level && m->barmapped) {
 			XUnmapWindow(dpy, m->barwin);
+			m->barmapped = 0;
+		}
 		drawbar(m);
 	}
 }
@@ -3198,8 +3264,10 @@ applystyle(const Config *next)
 
 	int first = !theme_revision;
 	int old_modifier = settings.movemod;
-	if (first || next->showbar != settings.showbar)
+	if (first || next->showbar != settings.showbar) {
 		barvisible = next->showbar;
+		bar_level = shell_reveal(&whole_bar, barvisible, 0, 0);
+	}
 	if (first || next->showtraybar != settings.showtraybar)
 		systrayvisible = next->showtraybar;
 	if (!gap_overridden)
@@ -3207,8 +3275,25 @@ applystyle(const Config *next)
 
 	shell_panel_close(&shell, &panel);
 	shell_tooltip_close(&shell, &tooltip);
-	for (Monitor *m = mons; m; m = m->next)
+	for (Monitor *m = mons; m; m = m->next) {
 		shell_surface_free(&shell, &m->bar.surface);
+		m->bar.last_frame = 0;
+	}
+	unsigned hidden = 0;
+	for (int i = 0; i < settings.nsegments; ++i)
+		if (hidden_segments & (1u << i)) {
+			int index = config_segment(next, settings.segments[i].name);
+			if (index >= 0)
+				hidden |= 1u << index;
+		}
+	hidden_segments = hidden;
+	if (first)
+		controls_init(&controls);
+	else if (strcmp(settings.audio_sink, next->audio_sink) ||
+	         strcmp(settings.battery_device, next->battery_device) ||
+	         strcmp(settings.backlight_device, next->backlight_device) ||
+	         settings.brightness_min != next->brightness_min)
+		controls_reset(&controls);
 	shell_font_free(&shellfont);
 	shellfont = font;
 	if (settings.cpu_interval != next->cpu_interval)
@@ -3370,6 +3455,7 @@ setup(const RestartState *state)
 
 	if (state) {
 		barvisible = state->bar;
+		bar_level = shell_reveal(&whole_bar, barvisible, 0, 0);
 		systrayvisible = state->tray;
 		gap_overridden = state->gap_override;
 		if (gap_overridden)
@@ -3396,6 +3482,7 @@ cleanup(void)
 	Monitor *m;
 
 	running = 0;
+	controls_reset(&controls);
 	shell_panel_close(&shell, &panel);
 	shell_tooltip_close(&shell, &tooltip);
 	while (clients)
@@ -3529,6 +3616,12 @@ save_session(FILE *file, Window requestor)
 			return 0;
 	if (fwrite(&timer.duration, sizeof timer.duration, 1, file) != 1)
 		return 0;
+	char hidden[MAX_BAR_SEGMENTS][SEGMENT_NAME] = {{0}};
+	for (int i = 0; i < settings.nsegments; ++i)
+		if (hidden_segments & (1u << i))
+			strcpy(hidden[i], settings.segments[i].name);
+	if (fwrite(hidden, sizeof hidden, 1, file) != 1)
+		return 0;
 	return fflush(file) == 0 && fseek(file, 0, SEEK_SET) == 0;
 }
 
@@ -3585,6 +3678,7 @@ restart(Window requestor)
 		char *args[6];
 		restart_args(args, RESTART_RESUME, fd_arg);
 		XFlush(dpy);
+		controls_reset(&controls);
 		fexecve(fd, args, environ);
 		detail = "cannot execute the replacement";
 	}
@@ -3693,6 +3787,10 @@ resume_session(FILE *file, const RestartState *state)
 	size_t bytes = fread(&timer_duration, 1, sizeof timer_duration, file);
 	if (ferror(file) || (bytes && bytes != sizeof timer_duration))
 		die("mwm: incomplete timer state");
+	char hidden[MAX_BAR_SEGMENTS][SEGMENT_NAME] = {{0}};
+	bytes = fread(hidden, 1, sizeof hidden, file);
+	if (ferror(file) || (bytes && bytes != sizeof hidden))
+		die("mwm: incomplete segment state");
 	fclose(file);
 
 	/* Retire the previous resources under one grab. The server reparents and
@@ -3703,6 +3801,12 @@ resume_session(FILE *file, const RestartState *state)
 	close(state->display_fd);
 	checkotherwm();
 	setup(state);
+	for (int i = 0; i < MAX_BAR_SEGMENTS; ++i) {
+		hidden[i][SEGMENT_NAME-1] = 0;
+		int index = config_segment(&settings, hidden[i]);
+		if (index >= 0)
+			hidden_segments |= 1u << index;
+	}
 	if (timer.active)
 		timer.duration = isfinite(timer_duration) && timer_duration > 0 ? timer_duration
 		                 : fmax(1, shell_timer_remaining(&timer, time(NULL), shell_seconds()));
@@ -3949,6 +4053,21 @@ timer_key(KeySym key, int ch)
 }
 
 static void
+set_control(int kind, int value)
+{
+	controls_set(&controls, kind, value);
+	drawbars();
+	panel_dirty |= panel.win && shell_panel_control(panel.kind) == kind;
+}
+
+static void
+adjust_control(int kind, int direction)
+{
+	int value = controls_value(&controls, kind);
+	set_control(kind, value + direction * controls_step(&settings, kind));
+}
+
+static void
 panel_key(XKeyEvent *event)
 {
 	char latin1[32], bytes[2 * sizeof latin1 + 1];
@@ -3957,6 +4076,18 @@ panel_key(XKeyEvent *event)
 	size_t n = latin1_utf8(bytes, sizeof bytes, latin1, raw > 0 ? raw : 0);
 	if (key == XK_Escape) {
 		shell_panel_close(&shell, &panel);
+		return;
+	}
+	int control = shell_panel_control(panel.kind);
+	if (control >= 0) {
+		if (key == XK_Left || key == XK_Down || key == XK_KP_Left || key == XK_KP_Down)
+			adjust_control(control, -1);
+		if (key == XK_Right || key == XK_Up || key == XK_KP_Right || key == XK_KP_Up)
+			adjust_control(control, 1);
+		if (key == XK_Home || key == XK_KP_Home)
+			set_control(control, 0);
+		if (key == XK_End || key == XK_KP_End)
+			set_control(control, 100);
 		return;
 	}
 	if (panel.kind == ActCalendar) {
@@ -4010,6 +4141,7 @@ panel_key(XKeyEvent *event)
 static void
 panel_event(XEvent *e)
 {
+	int control = shell_panel_control(panel.kind);
 	if (e->type == Expose) {
 		panel_dirty = 1;
 		return;
@@ -4021,10 +4153,19 @@ panel_event(XEvent *e)
 	if (e->type == MotionNotify) {
 		panel.hover_x = e->xmotion.x;
 		panel.hover_y = e->xmotion.y;
+		if (control >= 0)
+			shell_panel_pointer(&panel, CUI_EVENT_POINTER_MOVE, panel.hover_x, panel.hover_y);
 		panel_dirty = 1;
 		return;
 	}
 	XButtonEvent *click = &e->xbutton;
+	if (e->type == ButtonRelease) {
+		if (control >= 0 && click->button == Button1) {
+			shell_panel_pointer(&panel, CUI_EVENT_POINTER_UP, click->x, click->y);
+			panel_dirty = 1;
+		}
+		return;
+	}
 	if (click->x < panel.pad || click->x >= panel.pad + panel.width
 	    || click->y < panel.pad || click->y >= panel.pad + panel.height) {
 		enum ShellAction was = panel.kind;
@@ -4033,13 +4174,17 @@ panel_event(XEvent *e)
 			if (!barvisible || click->y_root < m->by || click->y_root >= m->by + bh)
 				continue;
 			ShellHit hit = shell_hit(m->bar.hits, m->bar.nhits, click->x_root-m->mx, click->y_root-m->by);
-			if (click->button == Button1 && hit.action != was
-			    && (hit.action == ActCalendar || hit.action == ActClock || hit.action == ActPalette))
+			int hit_control = shell_panel_control(hit.action);
+			if (hit_control >= 0 && (click->button == Button4 || click->button == Button5))
+				adjust_control(hit_control, click->button == Button4 ? 1 : -1);
+			if (click->button == Button1 && hit.action != was && panel_action(hit.action))
 				openpanel(m, hit.action, m->mx + hit.rect.x + hit.rect.w / 2, click->time);
 		}
 		return;
 	}
 	if (click->button == Button4 || click->button == Button5) {
+		if (control >= 0)
+			adjust_control(control, click->button == Button4 ? 1 : -1);
 		if (panel.kind == ActCalendar)
 			panel_activate(click->button == Button4 ? ActPast : ActFuture, 0);
 		if (panel.kind == ActClock)
@@ -4047,19 +4192,26 @@ panel_event(XEvent *e)
 		return;
 	}
 	if (click->button == Button1) {
+		if (control >= 0) {
+			shell_panel_pointer(&panel, CUI_EVENT_POINTER_DOWN, click->x, click->y);
+			panel_dirty = 1;
+			return;
+		}
 		ShellHit hit = shell_hit(panel.hits, panel.nhits, click->x, click->y);
 		panel_activate(hit.action, hit.value);
 	}
 }
 
-static int
-system_visible(void)
+static unsigned
+active_bar_items(void)
 {
+	unsigned items = 0;
 	if (barvisible)
 		for (int i = 0; i < settings.nsegments; ++i)
-			if (settings.segments[i].segment == BarSystem)
-				return 1;
-	return 0;
+			if (!(hidden_segments & (1u << i)))
+				for (int j = 0; j < settings.segments[i].count; ++j)
+					items |= 1u << settings.segments[i].items[j];
+	return items;
 }
 
 static double
@@ -4158,7 +4310,7 @@ system_tooltip_tick(double tick)
 	static double due;
 	Monitor *m = NULL;
 	int metric = MetricNone;
-	if (barvisible && !panel.win && settings.tooltip_delay >= 0)
+	if (barvisible && bar_level == 1 && !panel.win && settings.tooltip_delay >= 0)
 		for (m = mons; m; m = m->next) {
 			metric = shell_bar_metric(&m->bar);
 			if (metric != MetricNone)
@@ -4182,7 +4334,7 @@ system_tooltip_tick(double tick)
 		anchor.x += m->mx;
 		anchor.y += m->by;
 		shell_tooltip_draw(&shell, &shellfont, theme_revision, &settings, &tooltip, &system_stats,
-		                   metric, (cui_rect){m->mx, m->my, m->mw, m->mh}, anchor);
+		                   &controls, metric, (cui_rect){m->mx, m->my, m->mw, m->mh}, anchor);
 	}
 	return 0;
 }
@@ -4228,17 +4380,30 @@ ui_tick(void)
 		panel_dirty |= panel.win && panel.kind == ActClock;
 	}
 	second = now;
-	if (!system_visible())
+	unsigned items = active_bar_items();
+	if (!(items & ((1u << BarCpu) | (1u << BarRam) | (1u << BarLoad))))
 		system_next = 0;
 	else if (tick >= system_next)
 		sample_system(tick);
 
 	int can_animate = tick >= frame;
-	int animating = 0;
+	if (can_animate)
+		animate_bar(tick);
+	int controls_changed = 0;
+	unsigned enabled = (items >> BarBattery) & ((1u << ControlCount) - 1);
+	int control = shell_panel_control(panel.kind);
+	if (panel.win && control >= 0)
+		enabled |= 1u << control;
+	int controls_timeout = controls_tick(&controls, &settings, enabled, ConnectionNumber(dpy), tick, &controls_changed);
+	if (controls_changed) {
+		drawbars();
+		panel_dirty |= panel.win && control >= 0;
+	}
+	int animating = whole_bar.progress != barvisible;
 	for (Monitor *m = mons; m; m = m->next) {
-		if (m->bardirty || (barvisible && m->bar.animating && can_animate))
+		if (m->bardirty || (bar_level > 0 && m->bar.animating && can_animate))
 			paintbar(m, now, tick);
-		animating |= barvisible && m->bar.animating;
+		animating |= bar_level > 0 && m->bar.animating;
 	}
 	int panel_animating = panel.win && shell.composited && !settings.reduced_motion
 	                      && (tick - panel.opened) * 1000 < settings.duration + 16;
@@ -4248,13 +4413,19 @@ ui_tick(void)
 		if (count)
 			panel.selected = MIN(panel.selected, count - 1);
 		shell_panel_draw(&shell, &shellfont, theme_revision, &settings, &panel,
-		                 &timer, entries, count, now, tick);
+		                 &timer, &controls, entries, count, now, tick);
 		panel_dirty = 0;
+		if (control >= 0 && panel.control_request >= 0) {
+			set_control(control, panel.control_request);
+			panel.control_request = -1;
+			controls_timeout = 1;
+		}
 	}
 	if (can_animate)
 		frame = tick + 0.016;
 	double tooltip_next = system_tooltip_tick(tick);
 	int timeout = animating || panel_animating ? MAX(1, (int)ceil((frame-tick)*1000)) : 1000;
+	timeout = MIN(timeout, controls_timeout);
 	if (timer.active)
 		timeout = MIN(timeout, MAX(1, (int)ceil(1000*shell_timer_remaining(&timer, now, tick))));
 	if (system_next)
@@ -4274,7 +4445,8 @@ run(void)
 			XEvent ev;
 			XNextEvent(dpy, &ev);
 			if (panel.win && ev.xany.window == panel.win &&
-			    (ev.type == KeyPress || ev.type == ButtonPress || ev.type == Expose || ev.type == MotionNotify))
+			    (ev.type == KeyPress || ev.type == ButtonPress || ev.type == ButtonRelease ||
+			     ev.type == Expose || ev.type == MotionNotify))
 				panel_event(&ev);
 			else if (ev.type >= 0 && ev.type < LASTEvent && handler[ev.type])
 				handler[ev.type](&ev);

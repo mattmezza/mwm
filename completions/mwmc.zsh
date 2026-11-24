@@ -25,6 +25,7 @@ _mwmc() {
             'gap:adjust the gap size'
             'bar:toggle/show/hide the bar'
             'traybar:toggle/show/hide the system tray'
+            'segment:list or change the visibility of a bar segment'
             'win:act on the focused window'
             'query:print machine-readable state'
             'palette:open the searchable command palette'
@@ -65,6 +66,11 @@ _mwmc() {
             esac ;;
         gap)     (( CURRENT == 2 )) && _values 'gap' +5 -5 ;;
         bar|traybar) (( CURRENT == 2 )) && _values 'action' toggle show hide ;;
+        segment)
+            case $CURRENT in
+            2) _values 'action' list toggle show hide ;;
+            3) [[ $words[2] != list ]] && _values 'segment' ${(f)"$(mwmc segment list 2>/dev/null | cut -d' ' -f1)"} ;;
+            esac ;;
         win)
             case $CURRENT in
             2) _values 'action' close tag toggle move resize center ;;

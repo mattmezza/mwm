@@ -36,6 +36,8 @@ usage(void)
 	"  gap +5|-5|<px>                  adjust gaps\n"
 	"  bar toggle|show|hide            show/hide the bar\n"
 	"  traybar toggle|show|hide        show/hide the system tray\n"
+	"  segment list                   list configured segments and visibility\n"
+	"  segment toggle|show|hide <name>\n"
 	"  win close                       close focused window\n"
 	"  win tag <name>                  move focused window to a tag\n"
 	"  win toggle float|full|sticky\n"

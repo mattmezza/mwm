@@ -147,6 +147,8 @@ mwmc win close
 # BAR / session
 mwmc bar toggle|show|hide            # show/hide the bar
 mwmc traybar toggle|show|hide        # show/hide the system tray
+mwmc segment list                    # list configured segments and visibility
+mwmc segment toggle|show|hide <name> # control an individual segment
 mwmc palette                         # search windows, tags, and layouts
 mwmc reload | mwmc restart | mwmc quit | mwmc version
 
@@ -204,11 +206,18 @@ The default config assigns tag 1 to monitor 0. Set `1 = -1` under
 - The system segment shows CPU and RAM history and three load-average bars
   for 1, 5, and 15 minutes. Hover over a metric to see its current reading.
   RAM usage is the share of usable memory reported as unavailable. By default
-  each 44 px history graph shows about 10 seconds at one sample every 250 ms.
+  each 36 px history graph shows about 10 seconds at one sample every 250 ms.
   The load bars share a scale, with a tick at one job per online logical CPU.
   Colors blend from the Xresources accent through `mwm.systemwarn` at 75%
   to `mwm.systemdanger` at 90% of capacity. Use `[system]` to customize
   chart widths, history lengths, sample interval, and hover delay.
+- The power segment shows filled battery, volume, and brightness icons.
+  Hover for the exact level, scroll to adjust, or click to open a slider.
+  Volume uses WirePlumber's `wpctl`. Brightness uses `brightnessctl` on the
+  selected backlight. The battery icon shows actual charge, while its slider
+  controls the charging limit on devices that allow the user to write it.
+  On other devices the battery popup shows the charge with a read-only track.
+  Set devices, scroll steps, refresh rate, and popup width under `[controls]`.
 - Click the date for the monthly calendar. The arrows or Left and Right change
   the month. **Today** or Home returns to the current month.
 - Click the time to see local time and the configured world clocks. Choose
@@ -238,19 +247,30 @@ The profile also shows how to apply a panel shader with GLX.
 
 The XEmbed tray uses the bar's status colors and follows the focused monitor.
 Set `systraymon` in `[tray]` to pin it to a zero-based monitor index.
-The tray, title, and status segments reverse their opening animation to close.
-Adjust timing with `duration` in `[motion]`, or enable `reduced_motion` to
-switch between states immediately.
+The whole bar slides in from its screen edge and reverses the motion to close.
+Individual segments can also slide open and closed. Adjust timing with
+`duration` in `[motion]`, or enable `reduced_motion` for immediate changes.
 
 Set `segments` under `[bar]` to arrange the left, center, and right groups.
-Order each comma-separated group from left to right and omit any segment to
-hide it. The tags segment includes the layout icon. The datetime segment
-includes both the date and clock.
+Order entries from left to right within each group. An entry can be a single
+item or a named segment containing several items. List each item at most once
+across the bar. Omit a segment from the placement to leave it out, or use
+`mwmc segment toggle <name>` to control its visibility at runtime.
 
 ```ini
 [bar]
-segments = tags, title | | status, system, datetime, tray
+segments = tags, title | | status, system, power, datetime, tray
+
+[segments]
+tags = spaces, layout
+system = cpu, ram, load
+power = battery, volume, brightness
+datetime = date, time
 ```
+
+These are the defaults. For separate power segments, replace `power` with
+`battery, volume, brightness` in `[bar]`. You can also name your own groups,
+for example `essentials = time, volume` in `[segments]`.
 
 ## Configuration
 
@@ -319,6 +339,7 @@ startx
 mwm.c          window manager
 mwmc.c         control client
 shell.{c,h}    CUI bar, panels, typography, and timer
+controls.{c,h} Linux battery, volume, and backlight controls
 mwm_config.*  INI and Xresources loader
 util.{c,h}     die/ecalloc
 ipc.h          IPC atom/protocol shared by mwm and mwmc
