@@ -324,7 +324,7 @@ static ShellFont shellfont;
 static ShellPanel panel;
 static ShellTimer timer;
 static ShellSystem system_stats;
-static double cpu_next;
+static double system_next;
 static unsigned int theme_revision;
 static const char *config_path;
 static int required_config;
@@ -3193,7 +3193,7 @@ applystyle(const Config *next)
 	shell_font_free(&shellfont);
 	shellfont = font;
 	if (settings.cpu_interval != next->cpu_interval)
-		cpu_next = 0;
+		system_next = 0;
 	settings = *next;
 	++theme_revision;
 	lrpad = 2 * MAX(5, settings.barpadx);
@@ -4033,7 +4033,7 @@ panel_event(XEvent *e)
 }
 
 static int
-cpu_visible(void)
+system_visible(void)
 {
 	if (barvisible)
 		for (int i = 0; i < settings.nsegments; ++i)
@@ -4042,16 +4042,13 @@ cpu_visible(void)
 	return 0;
 }
 
-static void
-sample_cpu(double tick)
+static double
+sample_cpu(int reset)
 {
 	static unsigned long long last_total, last_idle;
 	static int have_baseline;
-	if (!cpu_next) {
+	if (reset)
 		have_baseline = 0;
-		system_stats.count = 0;
-	}
-	cpu_next = tick + settings.cpu_interval / 1000.0;
 
 	unsigned long long user, nice, system, idle, iowait, irq, softirq, steal;
 	char line[512];
@@ -4062,29 +4059,67 @@ sample_cpu(double tick)
 	if (file)
 		fclose(file);
 	if (!ok) {
-		if (system_stats.count)
-			drawbars();
-		system_stats.count = 0;
 		have_baseline = 0;
-		return;
+		return -1;
 	}
 	idle += iowait;
 	unsigned long long total = user + nice + system + idle + irq + softirq + steal;
+	double usage = -1;
 	if (have_baseline && total > last_total && idle >= last_idle &&
-	    idle - last_idle <= total - last_total) {
-		double usage = 100.0 * (1.0 - (double)(idle - last_idle) / (total - last_total));
-		if (system_stats.count == MAX_CPU_SAMPLES) {
-			--system_stats.count;
-			memmove(system_stats.cpu, system_stats.cpu + 1,
-			        system_stats.count * sizeof system_stats.cpu[0]);
-		}
-		system_stats.cpu[system_stats.count++] = (cui_chart_datum){.value = usage};
-		++system_stats.revision;
-		drawbars();
-	}
+	    idle - last_idle <= total - last_total)
+		usage = 100.0 * (1.0 - (double)(idle - last_idle) / (total - last_total));
 	last_total = total;
 	last_idle = idle;
 	have_baseline = 1;
+	return usage;
+}
+
+static double
+sample_ram(void)
+{
+	FILE *file = fopen("/proc/meminfo", "r");
+	if (!file)
+		return -1;
+	unsigned long long total = 0, available = 0;
+	int have_available = 0;
+	char line[256];
+	while (fgets(line, sizeof line, file)) {
+		if (!strncmp(line, "MemTotal:", 9))
+			sscanf(line + 9, "%llu", &total);
+		if (!strncmp(line, "MemAvailable:", 13))
+			have_available = sscanf(line + 13, "%llu", &available) == 1;
+		if (total && have_available)
+			break;
+	}
+	fclose(file);
+	return total && have_available ? 100.0 * (total - MIN(total, available)) / total : -1;
+}
+
+static void
+sample_system(double tick)
+{
+	int reset = !system_next;
+	system_next = tick + settings.cpu_interval / 1000.0;
+	double values[] = {[UsageCpu] = sample_cpu(reset), [UsageRam] = sample_ram()};
+	int changed = 0;
+	for (int i = 0; i < UsageCount; ++i) {
+		ShellUsage *usage = &system_stats.usage[i];
+		if (reset || values[i] < 0) {
+			changed |= usage->count > 0;
+			usage->count = 0;
+		}
+		if (values[i] < 0)
+			continue;
+		if (usage->count == MAX_USAGE_SAMPLES) {
+			--usage->count;
+			memmove(usage->history, usage->history + 1, usage->count * sizeof usage->history[0]);
+		}
+		usage->history[usage->count++] = (cui_chart_datum){.value = values[i]};
+		++usage->revision;
+		changed = 1;
+	}
+	if (changed)
+		drawbars();
 }
 
 static int
@@ -4127,10 +4162,10 @@ ui_tick(void)
 		panel_dirty |= panel.win && panel.kind == ActClock;
 	}
 	second = now;
-	if (!cpu_visible())
-		cpu_next = 0;
-	else if (tick >= cpu_next)
-		sample_cpu(tick);
+	if (!system_visible())
+		system_next = 0;
+	else if (tick >= system_next)
+		sample_system(tick);
 
 	int can_animate = tick >= frame;
 	int animating = 0;
@@ -4155,8 +4190,8 @@ ui_tick(void)
 	int timeout = animating || panel_animating ? MAX(1, (int)ceil((frame-tick)*1000)) : 1000;
 	if (timer.active)
 		timeout = MIN(timeout, MAX(1, (int)ceil(1000*shell_timer_remaining(&timer, now, tick))));
-	if (cpu_next)
-		timeout = MIN(timeout, MAX(1, (int)ceil((cpu_next-tick)*1000)));
+	if (system_next)
+		timeout = MIN(timeout, MAX(1, (int)ceil((system_next-tick)*1000)));
 	return timeout;
 }
 

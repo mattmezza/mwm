@@ -6,7 +6,8 @@
 #include <time.h>
 
 enum { MAX_TAGS = 100, MAX_RULES = 64, MAX_ZONES = 8, MAX_TIMER_PRESETS = 5, CONFIG_ERROR = 768 };
-enum { MAX_CPU_SAMPLES = 120, MAX_CPU_WIDTH = 200 };
+enum { MAX_USAGE_SAMPLES = 120, MAX_USAGE_WIDTH = 200 };
+enum { UsageWarning, UsageDanger, UsageColorCount };
 enum { SchemeNorm, SchemeSel, SchemeUrg, SchemeTitle, SchemeStatus, SchemeBar, SchemeLast };
 enum { ColFg, ColBg, ColBorder };
 enum BarSegment { BarTags, BarTitle, BarStatus, BarSystem, BarDatetime, BarTray, BarSegmentCount };
@@ -35,7 +36,7 @@ typedef struct {
 	BarPlacement segments[BarSegmentCount];
 	int nsegments, custom_segments;
 	int timerprogressheight;
-	int cpu_interval, cpu_history, cpu_width;
+	int cpu_interval, cpu_history, cpu_width, ram_history, ram_width;
 	int showsystray, showtraybar, systraymon, systrayspacing, systrayvertpad;
 	int panelradius, panel_opacity, calendar_width, clock_width, palette_width;
 	int duration, reduced_motion, shadows, shadow_opacity, bar_shadow_blur, panel_shadow_blur;
@@ -43,6 +44,8 @@ typedef struct {
 	char colors[SchemeLast][3][64];
 	int alpha[SchemeLast];
 	cui_color palette[SchemeLast][3];
+	char usage_colors[UsageColorCount][64];
+	cui_color usage_palette[UsageColorCount];
 	char tags[MAX_TAGS][64];
 	int tagmon[MAX_TAGS], ntags;
 	Rule rules[MAX_RULES];

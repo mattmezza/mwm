@@ -446,6 +446,14 @@ static const char *layout_icons[] = {
 	"<rect x='7' y='8' width='14' height='12' rx='1.5'/>",
 };
 
+static const char *usage_icons[UsageCount] = {
+	[UsageCpu] = "<rect x='5' y='5' width='14' height='14' rx='2.5'/>"
+	             "<rect x='9' y='9' width='6' height='6' rx='1'/>"
+	             "<path d='M9 2.5V5m6-2.5V5M9 19v2.5m6-2.5v2.5M2.5 9H5m-2.5 6H5m14-6h2.5m-2.5 6h2.5'/>",
+	[UsageRam] = "<rect x='2.5' y='6.5' width='19' height='10' rx='1.5'/>"
+	             "<path d='M6 10h4v3H6zM14 10h4v3h-4zM6 16.5v3m4-3v3m4-3v3m4-3v3'/>",
+};
+
 static void
 icon(Frame *f, int id, cui_rect rect, const char *paths, cui_color fg, cui_icon_state *state)
 {
@@ -468,6 +476,7 @@ icon(Frame *f, int id, cui_rect rect, const char *paths, cui_color fg, cui_icon_
 
 static cui_icon_state icon_states[COUNT(icons)];
 static cui_icon_state layout_states[COUNT(layout_icons)];
+static cui_icon_state usage_states[UsageCount];
 
 void
 shell_icons_free(void)
@@ -476,6 +485,8 @@ shell_icons_free(void)
 		cui_icon_state_destroy(&icon_states[i]);
 	for (int i = 0; i < COUNT(layout_states); ++i)
 		cui_icon_state_destroy(&layout_states[i]);
+	for (int i = 0; i < UsageCount; ++i)
+		cui_icon_state_destroy(&usage_states[i]);
 }
 
 static void
@@ -792,13 +803,68 @@ bar_datetime(Frame *f, cui_rect r, const char *date, const char *clock,
 	}
 }
 
-enum { SystemPadding = 10, SystemGap = 8, CpuLabelSize = 11 };
+enum { SystemPadding = 10, SystemGap = 7, SystemDividerGap = 18, UsageIconSize = 18 };
 
 static int
 system_width(const Frame *f)
 {
-	return 2*SystemPadding + SystemGap + textwidth(f, "CPU", CpuLabelSize, medium)
-	       + textwidth(f, "100%", f->size, mono);
+	return 2*SystemPadding + SystemDividerGap + UsageCount *
+	       (UsageIconSize + SystemGap + textwidth(f, "100%", f->size, mono));
+}
+
+static cui_color
+usage_color(const Config *config, cui_color accent, double percent)
+{
+	cui_color warning = config->usage_palette[UsageWarning];
+	cui_color danger = config->usage_palette[UsageDanger];
+	if (percent <= 75)
+		return blend(accent, warning, fmax(0, (percent - 50) / 25));
+	return blend(warning, danger, fmin(1, (percent - 75) / 15));
+}
+
+static void
+bar_usage(Frame *f, ShellUsageChart *chart, const ShellUsage *usage,
+          int kind, int history, int number, cui_rect r, cui_color fg, cui_color accent)
+{
+	int id = 60 + kind*8;
+	int x = r.x + UsageIconSize + SystemGap;
+	cui_rect symbol = {r.x, r.y + ((int)r.h-UsageIconSize)/2, UsageIconSize, UsageIconSize};
+	icon(f, id, symbol, usage_icons[kind], alpha(fg, 210), &usage_states[kind]);
+	char value[8] = "–";
+	double percent = usage->count ? usage->history[usage->count-1].value : 0;
+	if (usage->count)
+		snprintf(value, sizeof value, "%d%%", (int)round(percent));
+	label(f, id+1, (cui_rect){x, r.y, number, r.h}, value,
+	      fg, f->size, mono, CUI_ALIGN_END);
+
+	int left = x + number + SystemGap;
+	int width = (int)(r.x + r.w) - left;
+	if (width < 16)
+		return;
+	int height = MIN(USAGE_CHART_HEIGHT, (int)r.h - 8);
+	int top = r.y + (int)(r.h - height)/2;
+	box(f, id+2, (cui_rect){left, top + height/2, width, 1}, 0,
+	    alpha(fg, 32), transparent, 0, 0);
+
+	int count = MIN(usage->count, history);
+	if (count < 2)
+		return;
+	int span = MAX(2, (int)round((width - 1.0) * (count - 1) / (history - 1)) + 1);
+	chart->state.pixels = chart->pixels;
+	chart->state.byte_capacity = sizeof chart->pixels;
+	cui_color color = usage_color(f->config, alpha(accent, 255), percent);
+	cui_rect graph = {left + width - span, top, span, height};
+	cui_begin_absolute_box(f->ui, id+3, (cui_box){.width = span, .height = height}, graph);
+	cui_chart(f->ui, id+4, &chart->state, &(cui_chart_options){
+		.kind = CUI_CHART_AREA, .curve = CUI_CHART_CURVE_LINEAR,
+		.data = usage->history + usage->count - count, .count = count, .data_revision = usage->revision,
+		.width = span, .height = height, .has_domain = true, .domain_min = 0, .domain_max = 100,
+		.hide_axes = true, .hide_x_axis = true, .hide_grid = true, .hide_legend = true,
+		.noninteractive = true, .disable_appear = true,
+		.custom_y_padding = true, .y_padding_top = 1, .y_padding_bottom = 1,
+		.series = {color}, .primary_fill = alpha(color, 55), .line_width = 1.5f,
+	}, cui_string(kind == UsageCpu ? "CPU utilization" : "RAM utilization"));
+	cui_end_box(f->ui);
 }
 
 static void
@@ -808,44 +874,20 @@ bar_system(Frame *f, ShellBar *bar, cui_rect r, const ShellSystem *system,
 	const Config *c = f->config;
 	cui_color bg = surface_color(f, SchemeStatus), fg = c->palette[SchemeStatus][ColFg];
 	box(f, 50, r, c->segradius, bg, outline, bg.a != 0, 1);
-	int x = r.x + SystemPadding;
-	int key = textwidth(f, "CPU", CpuLabelSize, medium);
-	label(f, 51, (cui_rect){x, r.y, key, r.h}, "CPU",
-	      blend(bg, fg, 0.76f), CpuLabelSize, medium, CUI_ALIGN_START);
+
 	int number = textwidth(f, "100%", f->size, mono);
-	char value[8] = "–";
-	if (system->count)
-		snprintf(value, sizeof value, "%d%%", (int)round(system->cpu[system->count-1].value));
-	label(f, 52, (cui_rect){x+key+SystemGap, r.y, number, r.h}, value,
-	      fg, f->size, mono, CUI_ALIGN_END);
-
-	int width = MIN(c->cpu_width, (int)r.w - system_width(f) - SystemGap);
-	if (width < 16)
-		return;
-	int height = MIN(CPU_CHART_HEIGHT, (int)r.h - 8);
-	int left = r.x + r.w - SystemPadding - width;
-	int top = r.y + (int)(r.h - height)/2;
-	box(f, 53, (cui_rect){left, top + height/2, width, 1}, 0,
-	    alpha(fg, 32), transparent, 0, 0);
-
-	int count = MIN(system->count, c->cpu_history);
-	if (count < 2)
-		return;
-	int span = MAX(2, (int)round((width - 1.0) * (count - 1) / (c->cpu_history - 1)) + 1);
-	bar->cpu_chart.pixels = bar->cpu_pixels;
-	bar->cpu_chart.byte_capacity = sizeof bar->cpu_pixels;
-	cui_rect graph = {left + width - span, top, span, height};
-	cui_begin_absolute_box(f->ui, 54, (cui_box){.width = span, .height = height}, graph);
-	cui_chart(f->ui, 55, &bar->cpu_chart, &(cui_chart_options){
-		.kind = CUI_CHART_AREA, .curve = CUI_CHART_CURVE_LINEAR,
-		.data = system->cpu + system->count - count, .count = count, .data_revision = system->revision,
-		.width = span, .height = height, .has_domain = true, .domain_min = 0, .domain_max = 100,
-		.hide_axes = true, .hide_x_axis = true, .hide_grid = true, .hide_legend = true,
-		.noninteractive = true, .disable_appear = true,
-		.custom_y_padding = true, .y_padding_top = 1, .y_padding_bottom = 1,
-		.series = {accent}, .primary_fill = alpha(accent, 55), .line_width = 1.5f,
-	}, cui_string("CPU utilization"));
-	cui_end_box(f->ui);
+	int base = UsageIconSize + SystemGap + number;
+	int graphs = (int)r.w - system_width(f);
+	int cpu_graph = graphs * (SystemGap + c->cpu_width) / (2*SystemGap + c->cpu_width + c->ram_width);
+	int cpu = base + cpu_graph, ram = base + graphs - cpu_graph;
+	int x = r.x + SystemPadding, split = x + cpu;
+	bar_usage(f, &bar->usage_charts[UsageCpu], &system->usage[UsageCpu],
+	          UsageCpu, c->cpu_history, number, (cui_rect){x, r.y, cpu, r.h}, fg, accent);
+	box(f, 51, (cui_rect){split+(SystemDividerGap-1)/2, r.y+8, 1, r.h-16},
+	    0, outline, transparent, 0, 0);
+	bar_usage(f, &bar->usage_charts[UsageRam], &system->usage[UsageRam],
+	          UsageRam, c->ram_history, number,
+	          (cui_rect){split+SystemDividerGap, r.y, ram, r.h}, fg, accent);
 }
 
 typedef struct {
@@ -973,7 +1015,7 @@ shell_bar_draw(const ShellHost *host, const ShellFont *font, unsigned revision,
 		[BarTags] = {tags, MIN(tags, 40), .level = 1},
 		[BarTitle] = {titlew, titlew >= 54 ? 54 : 0, .level = title},
 		[BarStatus] = {statusw, MIN(statusw, 40), .level = status},
-		[BarSystem] = {system + SystemGap + c->cpu_width, system, .level = 1},
+		[BarSystem] = {system + 2*SystemGap + c->cpu_width + c->ram_width, system, .level = 1},
 		[BarDatetime] = {datetime, textwidth(&f, clock, size, mono) + 14, .level = 1},
 		[BarTray] = {m->tray_width, tray_min, .level = tray},
 	};

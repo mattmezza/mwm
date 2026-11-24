@@ -201,10 +201,12 @@ The default config assigns tag 1 to monitor 0. Set `1 = -1` under
 
 - Click a tag to view it. Scroll over the tag group to cycle tags. The layout
   button cycles forwards with a left click and backwards with a right click.
-- The system segment shows aggregate CPU usage and a live history graph in
-  the Xresources accent color. The default history spans about 10 seconds at
-  one sample every 250 ms. Set the interval, sample count, and graph width
-  under `[system]`.
+- The system segment shows CPU and RAM percentages with matching live history
+  graphs. RAM usage is the share of usable memory reported as unavailable.
+  By default each 44 px graph shows about 10 seconds at one sample every
+  250 ms. Use `[system]` to change the interval, history lengths, and widths.
+  The graphs blend from the Xresources accent through `mwm.systemwarn` at 75%
+  to `mwm.systemdanger` at 90%.
 - Click the date for the monthly calendar. The arrows or Left and Right change
   the month. **Today** or Home returns to the current month.
 - Click the time to see local time and the configured world clocks. Choose

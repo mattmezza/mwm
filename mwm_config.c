@@ -37,7 +37,8 @@ config_defaults(Config *c)
 		             {BarSystem, BarRight}, {BarDatetime, BarRight}, {BarTray, BarRight}},
 		.nsegments = BarSegmentCount,
 		.timerprogressheight = 2,
-		.cpu_interval = 250, .cpu_history = 40, .cpu_width = 88,
+		.cpu_interval = 250, .cpu_history = 40, .cpu_width = 44,
+		.ram_history = 40, .ram_width = 44,
 		.showsystray = 1, .showtraybar = 1, .systraymon = -1, .systrayspacing = 7, .systrayvertpad = 6,
 		.panelradius = 6, .panel_opacity = 255, .calendar_width = 394, .clock_width = 448, .palette_width = 530,
 		.duration = 150, .shadows = 1, .shadow_opacity = 112, .bar_shadow_blur = 2, .panel_shadow_blur = 6,
@@ -51,6 +52,7 @@ config_defaults(Config *c)
 			[SchemeBar]    = {"#c0caf5", "#16161e", "#3b4261"},
 		},
 		.alpha = {255, 255, 255, 255, 255, 0},
+		.usage_colors = {[UsageWarning] = "#e0af68", [UsageDanger] = "#ff5266"},
 		.ntags = COUNT(tags), .nrules = COUNT(rules),
 		.in_presets = {10, 20, 30, 60, 90}, .nin_presets = 5, .at_presets = 5,
 	};
@@ -86,8 +88,10 @@ static const Setting settings[] = {
 	INT("bar", "barfontsize", barfontsize, 0, 28),
 	INT("bar", "timerprogressheight", timerprogressheight, 0, 5),
 	INT("system", "cpu_interval", cpu_interval, 100, 60000),
-	INT("system", "cpu_history", cpu_history, 2, MAX_CPU_SAMPLES),
-	INT("system", "cpu_width", cpu_width, 32, MAX_CPU_WIDTH),
+	INT("system", "cpu_history", cpu_history, 2, MAX_USAGE_SAMPLES),
+	INT("system", "cpu_width", cpu_width, 16, MAX_USAGE_WIDTH),
+	INT("system", "ram_history", ram_history, 2, MAX_USAGE_SAMPLES),
+	INT("system", "ram_width", ram_width, 16, MAX_USAGE_WIDTH),
 	INT("tray", "showsystray", showsystray, 0, 1), INT("tray", "showtraybar", showtraybar, 0, 1),
 	INT("tray", "systraymon", systraymon, -1, 99), INT("tray", "systrayspacing", systrayspacing, 0, 24),
 	INT("tray", "systrayvertpad", systrayvertpad, 0, 24),
@@ -112,6 +116,7 @@ static const Setting settings[] = {
 	STR("theme", "titlefg", colors[SchemeTitle][ColFg]), STR("theme", "titlebg", colors[SchemeTitle][ColBg]),
 	STR("theme", "statusfg", colors[SchemeStatus][ColFg]), STR("theme", "statusbg", colors[SchemeStatus][ColBg]),
 	STR("theme", "barbg", colors[SchemeBar][ColBg]),
+	STR("theme", "systemwarn", usage_colors[UsageWarning]), STR("theme", "systemdanger", usage_colors[UsageDanger]),
 	INT("theme", "normbgalpha", alpha[SchemeNorm], 0, 255), INT("theme", "selbgalpha", alpha[SchemeSel], 0, 255),
 	INT("theme", "urgbgalpha", alpha[SchemeUrg], 0, 255), INT("theme", "titlebgalpha", alpha[SchemeTitle], 0, 255),
 	INT("theme", "statusbgalpha", alpha[SchemeStatus], 0, 255), INT("theme", "barbgalpha", alpha[SchemeBar], 0, 255),
@@ -447,6 +452,19 @@ config_read(Config *c, const char *path, int required, char error[CONFIG_ERROR])
 	return !reason;
 }
 
+static int
+theme_color(Display *dpy, Colormap cmap, const char *name, int alpha, cui_color *out,
+            char error[CONFIG_ERROR])
+{
+	XColor color;
+	if (!XParseColor(dpy, cmap, name, &color)) {
+		snprintf(error, CONFIG_ERROR, "invalid theme color: %s", name);
+		return 0;
+	}
+	*out = (cui_color){color.red >> 8, color.green >> 8, color.blue >> 8, alpha};
+	return 1;
+}
+
 int
 config_theme(Config *c, Display *dpy, Window root, Colormap cmap, char error[CONFIG_ERROR])
 {
@@ -482,14 +500,10 @@ config_theme(Config *c, Display *dpy, Window root, Colormap cmap, char error[CON
 		XFree(data);
 	}
 	for (int i = 0; ok && i < SchemeLast; ++i)
-		for (int j = 0; ok && j < 3; ++j) {
-			XColor color;
-			if (!XParseColor(dpy, cmap, c->colors[i][j], &color)) {
-				snprintf(error, CONFIG_ERROR, "invalid theme color: %s", c->colors[i][j]);
-				ok = 0;
-			} else
-				c->palette[i][j] = (cui_color){color.red >> 8, color.green >> 8,
-				                             color.blue >> 8, j == ColBg ? c->alpha[i] : 255};
-		}
+		for (int j = 0; ok && j < 3; ++j)
+			ok = theme_color(dpy, cmap, c->colors[i][j], j == ColBg ? c->alpha[i] : 255,
+			                 &c->palette[i][j], error);
+	for (int i = 0; ok && i < UsageColorCount; ++i)
+		ok = theme_color(dpy, cmap, c->usage_colors[i], 255, &c->usage_palette[i], error);
 	return ok;
 }

@@ -24,6 +24,9 @@ mwm.titlebg:         #1a1b26
 ! right status pill
 mwm.statusfg:        #c0caf5
 mwm.statusbg:        #1a1b26
+! system chart warning and danger colors
+mwm.systemwarn:      #e0af68
+mwm.systemdanger:    #ff5266
 ! bar background behind/around the pills. barbgalpha 0 = transparent bar with
 ! floating pills; raise it (e.g. 0xff) for a solid, contrasted bar strip.
 mwm.barbg:           #16161e

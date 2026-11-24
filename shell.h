@@ -47,13 +47,23 @@ typedef struct {
 	double started;
 } ShellReveal;
 
-enum { CPU_CHART_HEIGHT = 22 };
+enum { UsageCpu, UsageRam, UsageCount };
+enum { USAGE_CHART_HEIGHT = 22 };
 
 typedef struct {
-	cui_chart_datum cpu[MAX_CPU_SAMPLES];
+	cui_chart_datum history[MAX_USAGE_SAMPLES];
 	int count;
 	uint64_t revision;
+} ShellUsage;
+
+typedef struct {
+	ShellUsage usage[UsageCount];
 } ShellSystem;
+
+typedef struct {
+	cui_chart_state state;
+	unsigned char pixels[MAX_USAGE_WIDTH * USAGE_CHART_HEIGHT * 4];
+} ShellUsageChart;
 
 typedef struct {
 	ShellSurface surface;
@@ -68,8 +78,7 @@ typedef struct {
 	int animating;
 	ShellReveal tray_reveal, status_reveal, title_reveal;
 	int tray_x, tray_width;
-	cui_chart_state cpu_chart;
-	unsigned char cpu_pixels[MAX_CPU_WIDTH * CPU_CHART_HEIGHT * 4];
+	ShellUsageChart usage_charts[UsageCount];
 	char status[512], title[256];
 } ShellBar;
 
