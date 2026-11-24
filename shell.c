@@ -4,10 +4,16 @@
 #include <X11/extensions/shape.h>
 #include <fontconfig/fontconfig.h>
 #include <ctype.h>
+#include <errno.h>
+#include <limits.h>
 #include <math.h>
+#include <signal.h>
+#include <spawn.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include "cui/cui_icon.h"
@@ -1512,9 +1518,23 @@ shell_timer_remaining(const ShellTimer *timer, time_t now, double tick)
 	return timer->at ? difftime(timer->wall, now) : timer->due - tick;
 }
 
+static int
+has_user_bus(void)
+{
+	const char *runtime = getenv("XDG_RUNTIME_DIR");
+	if (!runtime || runtime[0] != '/')
+		return 0;
+	char socket[PATH_MAX];
+	struct stat info;
+	int length = snprintf(socket, sizeof socket, "%s/bus", runtime);
+	return length > 0 && (size_t)length < sizeof socket && stat(socket, &info) == 0 &&
+	       S_ISSOCK(info.st_mode) && info.st_uid == geteuid();
+}
+
 void
 shell_timer_notify(const Config *config, int xfd)
 {
+	const char *title = "Timer complete", *body = "Your mwm timer has finished.";
 	pid_t child = fork();
 	if (child < 0) {
 		perror("mwm: timer");
@@ -1524,11 +1544,29 @@ shell_timer_notify(const Config *config, int xfd)
 		return;
 	close(xfd);
 	if (config->hook[0]) {
-		execlp(config->hook, config->hook, "Timer complete", "Your mwm timer has finished.", (char *)NULL);
+		execlp(config->hook, config->hook, title, body, (char *)NULL);
 		perror("mwm: timer hook");
 	}
-	execlp("notify-send", "notify-send", "--app-name=mwm", "--icon=alarm-symbolic",
-	       "Timer complete", "Your mwm timer has finished.", (char *)NULL);
+
+	char *const args[] = {"notify-send", "--app-name=mwm", "--icon=alarm-symbolic",
+	                      (char *)title, (char *)body, NULL};
+	if (getenv("DBUS_SESSION_BUS_ADDRESS") && has_user_bus()) {
+		/* A private X session bus may not have the desktop notification server.
+		 * Let notify-send discover the user bus if the session send fails. */
+		extern char **environ;
+		signal(SIGCHLD, SIG_DFL);
+		if (posix_spawnp(&child, args[0], NULL, NULL, args, environ) == 0) {
+			int status;
+			pid_t done;
+			do {
+				done = waitpid(child, &status, 0);
+			} while (done < 0 && errno == EINTR);
+			if (done == child && WIFEXITED(status) && WEXITSTATUS(status) == 0)
+				_exit(0);
+		}
+		unsetenv("DBUS_SESSION_BUS_ADDRESS");
+	}
+	execvp(args[0], args);
 	perror("mwm: notify-send");
 	_exit(127);
 }

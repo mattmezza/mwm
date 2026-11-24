@@ -221,9 +221,11 @@ The default config assigns tag 1 to monitor 0. Set `1 = -1` under
   class, jump to tags, or change layouts. Use Up, Down, and Enter to select.
   Escape and outside clicks dismiss the panels.
 
-The timer uses `notify-send` by default. Set `timer_hook` in `[clock]` to an
-executable path or command on `PATH`. The hook receives a title and body as
-two arguments. Timers survive configuration reloads and in-place WM restarts.
+The timer uses `notify-send` and a desktop notification daemon by default.
+If delivery on the session bus fails, mwm retries with the user D-Bus socket
+when available. Set `timer_hook` in `[clock]` to an executable path or command
+on `PATH`. The hook receives a title and body as two arguments. Timers survive
+configuration reloads and in-place WM restarts.
 
 mwm uses CUI to paint the bar, panels, and their shadows. With picom, apply the
 `class_g = 'mwm'` rule from the supplied profile so the compositor leaves mwm's
