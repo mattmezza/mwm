@@ -308,7 +308,7 @@ rounded(Display *dpy, Pixmap mask, GC gc, cui_rect box, int radius)
 
 static void
 shape(const ShellHost *host, ShellSurface *surface, Window win, int w, int h,
-      const cui_rect *boxes, int n, int radius, int outset)
+      const cui_rect *boxes, int n, int radius, int outset, int input)
 {
 	if (!host->shape || (surface->shape_count == n && surface->shape_radius == radius
 	    && surface->shape_outset == outset && !memcmp(surface->shapes, boxes, n * sizeof *boxes)))
@@ -325,7 +325,10 @@ shape(const ShellHost *host, ShellSurface *surface, Window win, int w, int h,
 	XSetForeground(dpy, gc, 1);
 	for (int i = 0; i < n; ++i)
 		rounded(dpy, mask, gc, boxes[i], radius);
-	XShapeCombineMask(dpy, win, ShapeInput, 0, 0, mask, ShapeSet);
+	if (input)
+		XShapeCombineMask(dpy, win, ShapeInput, 0, 0, mask, ShapeSet);
+	else
+		XShapeCombineRectangles(dpy, win, ShapeInput, 0, 0, NULL, 0, ShapeSet, Unsorted);
 	if (outset) {
 		for (int i = 0; i < n; ++i) {
 			cui_rect bounds = {boxes[i].x - outset, boxes[i].y - outset,
@@ -802,13 +805,15 @@ bar_datetime(Frame *f, cui_rect r, const char *date, const char *clock,
 	}
 }
 
-enum { SystemPadding = 10, SystemGap = 7, SystemDividerGap = 18, UsageIconSize = 18 };
+enum { SystemPadding = 9, SystemGap = 5, SystemDividerGap = 14, UsageIconSize = 18, LoadMinWidth = 18 };
 
-static int
-system_width(const Frame *f)
+static const int system_min_width = 2*SystemPadding + 2*SystemDividerGap + 2*UsageIconSize + LoadMinWidth;
+static const char *metric_name[MetricCount] = {"CPU utilization", "RAM utilization", "Load average"};
+
+static const cui_chart_datum *
+latest_usage(const ShellUsage *usage)
 {
-	return 2*SystemPadding + SystemDividerGap + UsageCount *
-	       (UsageIconSize + SystemGap + textwidth(f, "100%", f->size, mono));
+	return usage->count ? &usage->history[usage->count-1] : NULL;
 }
 
 static cui_color
@@ -822,21 +827,14 @@ usage_color(const Config *config, cui_color accent, double percent)
 }
 
 static void
-bar_usage(Frame *f, ShellUsageChart *chart, const ShellUsage *usage,
-          int kind, int history, int number, cui_rect r, cui_color fg, cui_color accent)
+bar_usage(Frame *f, ShellUsageChart *chart, const ShellUsage *usage, int kind, int history,
+          cui_rect r, cui_color fg, cui_color accent)
 {
 	int id = 60 + kind*8;
-	int x = r.x + UsageIconSize + SystemGap;
 	cui_rect symbol = {r.x, r.y + ((int)r.h-UsageIconSize)/2, UsageIconSize, UsageIconSize};
-	icon(f, id, symbol, usage_icons[kind], alpha(fg, 210), &usage_states[kind]);
-	char value[8] = "–";
-	double percent = usage->count ? usage->history[usage->count-1].value : 0;
-	if (usage->count)
-		snprintf(value, sizeof value, "%d%%", (int)round(percent));
-	label(f, id+1, (cui_rect){x, r.y, number, r.h}, value,
-	      fg, f->size, mono, CUI_ALIGN_END);
+	icon(f, id, symbol, usage_icons[kind], accent, &usage_states[kind]);
 
-	int left = x + number + SystemGap;
+	int left = r.x + UsageIconSize + SystemGap;
 	int width = (int)(r.x + r.w) - left;
 	if (width < 16)
 		return;
@@ -851,7 +849,7 @@ bar_usage(Frame *f, ShellUsageChart *chart, const ShellUsage *usage,
 	int span = MAX(2, (int)round((width - 1.0) * (count - 1) / (history - 1)) + 1);
 	chart->state.pixels = chart->pixels;
 	chart->state.byte_capacity = sizeof chart->pixels;
-	cui_color color = usage_color(f->config, alpha(accent, 255), percent);
+	cui_color color = usage_color(f->config, accent, latest_usage(usage)->value);
 	cui_rect graph = {left + width - span, top, span, height};
 	cui_begin_absolute_box(f->ui, id+3, (cui_box){.width = span, .height = height}, graph);
 	cui_chart(f->ui, id+4, &chart->state, &(cui_chart_options){
@@ -862,8 +860,34 @@ bar_usage(Frame *f, ShellUsageChart *chart, const ShellUsage *usage,
 		.noninteractive = true, .disable_appear = true,
 		.custom_y_padding = true, .y_padding_top = 1, .y_padding_bottom = 1,
 		.series = {color}, .primary_fill = alpha(color, 55), .line_width = 1.5f,
-	}, cui_string(kind == UsageCpu ? "CPU utilization" : "RAM utilization"));
+	}, cui_string(metric_name[kind]));
 	cui_end_box(f->ui);
+}
+
+static void
+bar_load(Frame *f, const ShellSystem *system, cui_rect r, cui_color fg, cui_color accent)
+{
+	const int gap = 3;
+	int width = ((int)r.w - (LoadPeriods-1)*gap) / LoadPeriods;
+	int height = MIN(20, (int)r.h - 8);
+	int x = r.x + ((int)r.w - LoadPeriods*width - (LoadPeriods-1)*gap)/2;
+	int y = r.y + ((int)r.h-height)/2;
+	float radius = MIN(2, width/2.f);
+	/* The square-root scale leaves room for spikes above one job per logical CPU
+	 * while keeping low load differences legible in a short track. */
+	int capacity = round(height * sqrt(1 / 1.5));
+	for (int i = 0; i < LoadPeriods; ++i, x += width + gap) {
+		int id = 82 + 3*i;
+		box(f, id, (cui_rect){x, y, width, height}, radius, alpha(fg, 29), transparent, 0, 0);
+		if (system->load_valid && system->load[i] > 0) {
+			double ratio = system->load[i] / system->cpus;
+			int fill = MAX(1, round(height * sqrt(fmin(ratio / 1.5, 1))));
+			cui_color color = usage_color(f->config, accent, 100 * ratio);
+			box(f, id+1, (cui_rect){x, y+height-fill, width, fill}, radius,
+			    color, transparent, 0, 0);
+		}
+		box(f, id+2, (cui_rect){x, y+height-capacity, width, 1}, 0, alpha(fg, 104), transparent, 0, 0);
+	}
 }
 
 static void
@@ -874,19 +898,38 @@ bar_system(Frame *f, ShellBar *bar, cui_rect r, const ShellSystem *system,
 	cui_color bg = surface_color(f, SchemeStatus), fg = c->palette[SchemeStatus][ColFg];
 	box(f, 50, r, c->segradius, bg, outline, bg.a != 0, 1);
 
-	int number = textwidth(f, "100%", f->size, mono);
-	int base = UsageIconSize + SystemGap + number;
-	int graphs = (int)r.w - system_width(f);
+	int graphs = (int)r.w - system_min_width;
+	int load_width = MIN(c->load_width, LoadMinWidth + graphs);
+	graphs -= load_width - LoadMinWidth;
 	int cpu_graph = graphs * (SystemGap + c->cpu_width) / (2*SystemGap + c->cpu_width + c->ram_width);
-	int cpu = base + cpu_graph, ram = base + graphs - cpu_graph;
-	int x = r.x + SystemPadding, split = x + cpu;
+	int cpu = UsageIconSize + cpu_graph, ram = UsageIconSize + graphs - cpu_graph;
+	int x = r.x + SystemPadding;
+	bar->metrics[UsageCpu] = (cui_rect){x, r.y, cpu, r.h};
+	bar->metrics[UsageRam] = (cui_rect){x+cpu+SystemDividerGap, r.y, ram, r.h};
+	bar->metrics[MetricLoad] = (cui_rect){x+cpu+ram+2*SystemDividerGap, r.y, load_width, r.h};
+	for (int i = 0; i < MetricCount; ++i) {
+		cui_rect item = bar->metrics[i];
+		if (i > 0)
+			box(f, 50+i, (cui_rect){item.x-SystemDividerGap/2, r.y+8, 1, r.h-16},
+			    0, outline, transparent, 0, 0);
+		if (c->tooltip_delay >= 0 && inside(item, f->hover_x, f->hover_y))
+			box(f, 54+i, (cui_rect){item.x-3, r.y+3, item.w+6, r.h-6},
+			    c->segradius, blend(bg, fg, 0.08f), transparent, 0, 0);
+	}
 	bar_usage(f, &bar->usage_charts[UsageCpu], &system->usage[UsageCpu],
-	          UsageCpu, c->cpu_history, number, (cui_rect){x, r.y, cpu, r.h}, fg, accent);
-	box(f, 51, (cui_rect){split+(SystemDividerGap-1)/2, r.y+8, 1, r.h-16},
-	    0, outline, transparent, 0, 0);
+	          UsageCpu, c->cpu_history, bar->metrics[UsageCpu], fg, accent);
 	bar_usage(f, &bar->usage_charts[UsageRam], &system->usage[UsageRam],
-	          UsageRam, c->ram_history, number,
-	          (cui_rect){split+SystemDividerGap, r.y, ram, r.h}, fg, accent);
+	          UsageRam, c->ram_history, bar->metrics[UsageRam], fg, accent);
+	bar_load(f, system, bar->metrics[MetricLoad], fg, accent);
+}
+
+int
+shell_bar_metric(const ShellBar *bar)
+{
+	for (int i = 0; i < MetricCount; ++i)
+		if (inside(bar->metrics[i], bar->hover_x, bar->hover_y))
+			return i;
+	return MetricNone;
 }
 
 typedef struct {
@@ -977,6 +1020,7 @@ shell_bar_draw(const ShellHost *host, const ShellFont *font, unsigned revision,
 	Frame f = {bar->surface.ui, font, c, bar->hits, 0, COUNT(bar->hits),
 	           bar->hover_x, bar->hover_y, host->composited, fade, font->bar_size};
 	cui_set_reduced_motion(f.ui, c->reduced_motion != 0);
+	memset(bar->metrics, 0, sizeof bar->metrics);
 	cui_rect shapes[BarSegmentCount];
 	int n = 0;
 	float radius = c->segradius, size = f.size;
@@ -1008,13 +1052,13 @@ shell_bar_draw(const ShellHost *host, const ShellFont *font, unsigned revision,
 			statusw = MIN(statusw, w / 3);
 	}
 	int datetime = textwidth(&f, clock, size, mono) + textwidth(&f, date, size, mono) + 86;
-	int system = system_width(&f);
+	int system = system_min_width + c->load_width - LoadMinWidth;
 	int tray_min = host->shape ? MIN(m->tray_width, 2*MAX(5, c->barpadx) + 16) : m->tray_width;
 	BarSlot slots[BarSegmentCount] = {
 		[BarTags] = {tags, MIN(tags, 40), .level = 1},
 		[BarTitle] = {titlew, titlew >= 54 ? 54 : 0, .level = title},
 		[BarStatus] = {statusw, MIN(statusw, 40), .level = status},
-		[BarSystem] = {system + 2*SystemGap + c->cpu_width + c->ram_width, system, .level = 1},
+		[BarSystem] = {system + 2*SystemGap + c->cpu_width + c->ram_width, system_min_width, .level = 1},
 		[BarDatetime] = {datetime, textwidth(&f, clock, size, mono) + 14, .level = 1},
 		[BarTray] = {m->tray_width, tray_min, .level = tray},
 	};
@@ -1087,11 +1131,112 @@ shell_bar_draw(const ShellHost *host, const ShellFont *font, unsigned revision,
 		bar->tray_width = slots[BarTray].width;
 		bar->nhits = f.nhits;
 		if (bar_bg.a)
-			shape(host, &bar->surface, window, w, h, &strip, 1, 0, 0);
+			shape(host, &bar->surface, window, w, h, &strip, 1, 0, 0, 1);
 		else
-			shape(host, &bar->surface, window, w, h, shapes, n, radius, host->composited ? y : 0);
+			shape(host, &bar->surface, window, w, h, shapes, n, radius, host->composited ? y : 0, 1);
 		/* Expand the drawable region before presenting newly visible pixels. */
 		blit(host, &bar->surface, window);
+	}
+}
+
+void
+shell_tooltip_hide(const ShellHost *host, ShellTooltip *tip)
+{
+	if (tip->mapped)
+		XUnmapWindow(host->dpy, tip->win);
+	tip->mapped = 0;
+}
+
+void
+shell_tooltip_close(const ShellHost *host, ShellTooltip *tip)
+{
+	if (tip->win)
+		XDestroyWindow(host->dpy, tip->win);
+	shell_surface_free(host, &tip->surface);
+	*tip = (ShellTooltip){0};
+}
+
+void
+shell_tooltip_draw(const ShellHost *host, const ShellFont *font, unsigned revision,
+                   const Config *c, ShellTooltip *tip, const ShellSystem *system,
+                   int metric, cui_rect monitor, cui_rect anchor)
+{
+	const int padding = 11, gap = 6;
+	int load = metric == MetricLoad;
+	float size = fmaxf(11, font->size - 3);
+	Frame f = {.font = font, .config = c, .composite = host->composited, .size = size};
+	int pad = host->composited && c->shadows && c->shadow_opacity ? 4*c->bar_shadow_blur : 0;
+	int row = ceilf(size) + 8;
+	int width = load ? 13*size : textwidth(&f, metric_name[metric], size, medium) +
+	            textwidth(&f, "100%", size, mono) + 2*padding + 14;
+	int height = (load ? 3*row : row) + 12;
+	int w = width + 2*pad, h = height + 2*pad;
+	if (w > monitor.w || h + anchor.h + gap > monitor.h) {
+		shell_tooltip_hide(host, tip);
+		return;
+	}
+	int x = roundf(anchor.x + (anchor.w-w)/2);
+	int y = c->topbar ? anchor.y + anchor.h + gap - pad : anchor.y - height - gap - pad;
+	cui_rect geometry = {fmaxf(monitor.x, fminf(x, monitor.x + monitor.w - w)),
+	                     fmaxf(monitor.y, fminf(y, monitor.y + monitor.h - h)), w, h};
+
+	Display *dpy = host->dpy;
+	if (!tip->win) {
+		XSetWindowAttributes attrs = {.override_redirect = True, .background_pixel = 0,
+		                              .border_pixel = 0, .colormap = host->cmap, .event_mask = ExposureMask};
+		tip->win = XCreateWindow(dpy, host->root, geometry.x, geometry.y, w, h, 0,
+		                         host->depth, InputOutput, host->visual,
+		                         CWOverrideRedirect | CWBackPixel | CWBorderPixel | CWColormap | CWEventMask, &attrs);
+		XClassHint klass = {"mwm-tooltip", "mwm"};
+		XSetClassHint(dpy, tip->win, &klass);
+		XStoreName(dpy, tip->win, "mwm system tooltip");
+	} else if (memcmp(&geometry, &tip->geometry, sizeof geometry)) {
+		XMoveResizeWindow(dpy, tip->win, geometry.x, geometry.y, w, h);
+	}
+	tip->geometry = geometry;
+	if (!begin(host, font, revision, &tip->surface, tip->win, w, h, 0))
+		return;
+
+	f.ui = tip->surface.ui;
+	cui_color fg = c->palette[SchemeStatus][ColFg], bg = alpha(c->palette[SchemeStatus][ColBg], 255);
+	cui_color accent = alpha(c->palette[SchemeSel][ColBg], 255);
+	cui_color muted = blend(bg, fg, 0.75f), outline = blend(bg, fg, 0.22f);
+	cui_rect body = {pad, pad, width, height};
+	box(&f, 1, body, c->panelradius, alpha(bg, host->composited ? c->panel_opacity : 255), outline, 1, 1);
+	int inner = width - 2*padding;
+	label(&f, 2, (cui_rect){pad+padding, pad+6, inner, row}, metric_name[metric],
+	      fg, size, medium, CUI_ALIGN_START);
+	if (load) {
+		static const char *period[] = {"1 min", "5 min", "15 min"};
+		int col = inner / LoadPeriods;
+		for (int i = 0; i < LoadPeriods; ++i) {
+			char text[24] = "–";
+			cui_color value_color = fg;
+			if (system->load_valid) {
+				snprintf(text, sizeof text, "%.2f", system->load[i]);
+				value_color = usage_color(c, accent, 100 * system->load[i] / system->cpus);
+			}
+			int xx = pad+padding+i*col;
+			label(&f, 3+i*2, (cui_rect){xx, pad+6+row, col, row}, period[i],
+			      muted, size-2, regular, CUI_ALIGN_CENTER);
+			label(&f, 4+i*2, (cui_rect){xx, pad+6+2*row, col, row}, text,
+			      value_color, size, mono, CUI_ALIGN_CENTER);
+		}
+	} else {
+		char text[8] = "–";
+		const cui_chart_datum *latest = latest_usage(&system->usage[metric]);
+		if (latest)
+			snprintf(text, sizeof text, "%d%%", (int)round(latest->value));
+		label(&f, 3, (cui_rect){pad+padding, pad+6, inner, row}, text,
+		      latest ? usage_color(c, accent, latest->value) : muted, size, mono, CUI_ALIGN_END);
+	}
+	if (render(host, &tip->surface)) {
+		shape(host, &tip->surface, tip->win, w, h, &body, 1, c->panelradius, pad, 0);
+		if (!tip->mapped)
+			XMapRaised(dpy, tip->win);
+		blit(host, &tip->surface, tip->win);
+		tip->mapped = 1;
+		tip->dirty = 0;
 	}
 }
 
@@ -1431,7 +1576,7 @@ shell_panel_draw(const ShellHost *host, const ShellFont *font, unsigned revision
 		palette(&f, p, entries, count, fg, muted, accent, ink, card, outline);
 	if (render(host, &p->surface)) {
 		p->nhits = f.nhits;
-		shape(host, &p->surface, p->win, w, h, &body, 1, radius, p->pad);
+		shape(host, &p->surface, p->win, w, h, &body, 1, radius, p->pad, 1);
 		blit(host, &p->surface, p->win);
 	}
 	return t < 1;

@@ -46,8 +46,8 @@ typedef struct {
 	int shown;
 } ShellReveal;
 
-enum { UsageCpu, UsageRam, UsageCount };
-enum { USAGE_CHART_HEIGHT = 22 };
+enum { MetricNone = -1, UsageCpu, UsageRam, UsageCount, MetricLoad = UsageCount, MetricCount };
+enum { USAGE_CHART_HEIGHT = 22, LoadPeriods = 3 };
 
 typedef struct {
 	cui_chart_datum history[MAX_USAGE_SAMPLES];
@@ -57,6 +57,9 @@ typedef struct {
 
 typedef struct {
 	ShellUsage usage[UsageCount];
+	double load[LoadPeriods];
+	long cpus;
+	int load_valid;
 } ShellSystem;
 
 typedef struct {
@@ -78,8 +81,16 @@ typedef struct {
 	ShellReveal tray_reveal, status_reveal, title_reveal;
 	int tray_x, tray_width;
 	ShellUsageChart usage_charts[UsageCount];
+	cui_rect metrics[MetricCount];
 	char status[512], title[256];
 } ShellBar;
+
+typedef struct {
+	ShellSurface surface;
+	Window win;
+	int mapped, dirty;
+	cui_rect geometry;
+} ShellTooltip;
 
 typedef struct {
 	int id, urgent;
@@ -134,6 +145,12 @@ ShellHit shell_hit(const ShellHit *, int count, int x, int y);
 void shell_bar_draw(const ShellHost *, const ShellFont *, unsigned revision,
                     const Config *, ShellBar *, Window, const ShellBarModel *,
                     const ShellTimer *, time_t now, double tick);
+int shell_bar_metric(const ShellBar *);
+void shell_tooltip_hide(const ShellHost *, ShellTooltip *);
+void shell_tooltip_close(const ShellHost *, ShellTooltip *);
+void shell_tooltip_draw(const ShellHost *, const ShellFont *, unsigned revision,
+                        const Config *, ShellTooltip *, const ShellSystem *,
+                        int metric, cui_rect monitor, cui_rect anchor);
 int shell_panel_open(const ShellHost *, const Config *, ShellPanel *, enum ShellAction,
                      int monitor, int x, int y, int w, int h, int by, int bh,
                      float anchor, Time time);

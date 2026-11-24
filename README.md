@@ -201,12 +201,14 @@ The default config assigns tag 1 to monitor 0. Set `1 = -1` under
 
 - Click a tag to view it. Scroll over the tag group to cycle tags. The layout
   button cycles forwards with a left click and backwards with a right click.
-- The system segment shows CPU and RAM percentages with matching live history
-  graphs. RAM usage is the share of usable memory reported as unavailable.
-  By default each 44 px graph shows about 10 seconds at one sample every
-  250 ms. Use `[system]` to change the interval, history lengths, and widths.
-  The graphs blend from the Xresources accent through `mwm.systemwarn` at 75%
-  to `mwm.systemdanger` at 90%.
+- The system segment shows CPU and RAM history and three load-average bars
+  for 1, 5, and 15 minutes. Hover over a metric to see its current reading.
+  RAM usage is the share of usable memory reported as unavailable. By default
+  each 44 px history graph shows about 10 seconds at one sample every 250 ms.
+  The load bars share a scale, with a tick at one job per online logical CPU.
+  Colors blend from the Xresources accent through `mwm.systemwarn` at 75%
+  to `mwm.systemdanger` at 90% of capacity. Use `[system]` to customize
+  chart widths, history lengths, sample interval, and hover delay.
 - Click the date for the monthly calendar. The arrows or Left and Right change
   the month. **Today** or Home returns to the current month.
 - Click the time to see local time and the configured world clocks. Choose
@@ -236,7 +238,7 @@ The profile also shows how to apply a panel shader with GLX.
 
 The XEmbed tray uses the bar's status colors and follows the focused monitor.
 Set `systraymon` in `[tray]` to pin it to a zero-based monitor index.
-The tray, title, and status segments slide open and closed. Adjust their
+The tray, title, and status segments reverse their opening animation to close. Adjust their
 timing with `duration` in `[motion]`, or enable `reduced_motion` to switch
 between states immediately.
 

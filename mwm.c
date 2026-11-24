@@ -322,6 +322,7 @@ static Config settings;
 static ShellHost shell;
 static ShellFont shellfont;
 static ShellPanel panel;
+static ShellTooltip tooltip;
 static ShellTimer timer;
 static ShellSystem system_stats;
 static double system_next;
@@ -1647,6 +1648,8 @@ paintbar(Monitor *m, time_t now, double tick)
 	}
 	shell_bar_draw(&shell, &shellfont, theme_revision, &settings, &m->bar,
 	               m->barwin, &state, &timer, now, tick);
+	if (tooltip.mapped && shell_bar_metric(&m->bar) != MetricNone)
+		tooltip.dirty = 1;
 	if (owns_tray && m->bar.tray_width) {
 		int x = m->mx + m->bar.tray_x + m->bar.tray_width - lrpad/2 - systray->width;
 		int y = m->by + state.pad + settings.systrayvertpad;
@@ -1762,10 +1765,17 @@ enternotify(XEvent *e)
 
 	if ((ev->mode != NotifyNormal || ev->detail == NotifyInferior) && ev->window != root)
 		return;
+	m = wintomon(ev->window);
+	if (m && ev->window == m->barwin) {
+		m->bar.hover_x = ev->x;
+		m->bar.hover_y = ev->y;
+		drawbar(m);
+	}
 	if (!settings.focusfollowsmouse)
 		return;
 	c = wintoclient(ev->window);
-	m = c ? clientmon(c) : wintomon(ev->window);
+	if (c)
+		m = clientmon(c);
 	if (m != selmon) {
 		unfocus(selmon->sel, 1);
 		selmon = m ? m : selmon;
@@ -1816,6 +1826,10 @@ expose(XEvent *e)
 
 	if (ev->count)
 		return;
+	if (ev->window == tooltip.win) {
+		tooltip.dirty = 1;
+		return;
+	}
 	if ((m = wintomon(ev->window)))
 		drawbar(m);
 }
@@ -2988,6 +3002,7 @@ updategeom(int initial)
 		return 0;
 
 	shell_panel_close(&shell, &panel);
+	shell_tooltip_close(&shell, &tooltip);
 	/* snapshot old per-monitor selected tags by index */
 	for (i = 0; i < MaxMonitors; i++)
 		oldseltag[i] = -1;
@@ -3065,7 +3080,7 @@ updatebars(void)
 	wa.background_pixel = 0;
 	wa.border_pixel = 0;
 	wa.colormap = cmap;
-	wa.event_mask = ButtonPressMask | ExposureMask | PointerMotionMask | LeaveWindowMask;
+	wa.event_mask = ButtonPressMask | ExposureMask | PointerMotionMask | EnterWindowMask | LeaveWindowMask;
 
 	for (m = mons; m; m = m->next) {
 		updatebarpos(m);
@@ -3188,6 +3203,7 @@ applystyle(const Config *next)
 		gappx_run = next->gappx;
 
 	shell_panel_close(&shell, &panel);
+	shell_tooltip_close(&shell, &tooltip);
 	for (Monitor *m = mons; m; m = m->next)
 		shell_surface_free(&shell, &m->bar.surface);
 	shell_font_free(&shellfont);
@@ -3378,6 +3394,7 @@ cleanup(void)
 
 	running = 0;
 	shell_panel_close(&shell, &panel);
+	shell_tooltip_close(&shell, &tooltip);
 	while (clients)
 		unmanage(clients, 0);
 	if (systray) {
@@ -4101,7 +4118,15 @@ sample_system(double tick)
 	int reset = !system_next;
 	system_next = tick + settings.cpu_interval / 1000.0;
 	double values[] = {[UsageCpu] = sample_cpu(reset), [UsageRam] = sample_ram()};
-	int changed = 0;
+	double load[LoadPeriods];
+	long cpus = sysconf(_SC_NPROCESSORS_ONLN);
+	int valid = cpus > 0 && getloadavg(load, LoadPeriods) == LoadPeriods;
+	int changed = valid != system_stats.load_valid ||
+	              (valid && (cpus != system_stats.cpus || memcmp(load, system_stats.load, sizeof load)));
+	system_stats.load_valid = valid;
+	system_stats.cpus = cpus;
+	if (valid)
+		memcpy(system_stats.load, load, sizeof load);
 	for (int i = 0; i < UsageCount; ++i) {
 		ShellUsage *usage = &system_stats.usage[i];
 		if (reset || values[i] < 0) {
@@ -4122,6 +4147,43 @@ sample_system(double tick)
 		drawbars();
 }
 
+static double
+system_tooltip_tick(double tick)
+{
+	static Window hovered_bar;
+	static int hovered_metric = MetricNone;
+	static double due;
+	Monitor *m = NULL;
+	int metric = MetricNone;
+	if (barvisible && !panel.win && settings.tooltip_delay >= 0)
+		for (m = mons; m; m = m->next) {
+			metric = shell_bar_metric(&m->bar);
+			if (metric != MetricNone)
+				break;
+		}
+	if (!m) {
+		hovered_bar = None;
+		shell_tooltip_hide(&shell, &tooltip);
+		return 0;
+	}
+	if (m->barwin != hovered_bar || metric != hovered_metric) {
+		due = tick + (tooltip.mapped ? 0 : settings.tooltip_delay / 1000.0);
+		hovered_bar = m->barwin;
+		hovered_metric = metric;
+		tooltip.dirty = 1;
+	}
+	if (tick < due)
+		return due;
+	if (tooltip.dirty || !tooltip.mapped) {
+		cui_rect anchor = m->bar.metrics[metric];
+		anchor.x += m->mx;
+		anchor.y += m->by;
+		shell_tooltip_draw(&shell, &shellfont, theme_revision, &settings, &tooltip, &system_stats,
+		                   metric, (cui_rect){m->mx, m->my, m->mw, m->mh}, anchor);
+	}
+	return 0;
+}
+
 static int
 ui_tick(void)
 {
@@ -4140,6 +4202,7 @@ ui_tick(void)
 		if (composited != shell.composited) {
 			shell.composited = composited;
 			shell_panel_close(&shell, &panel);
+			shell_tooltip_close(&shell, &tooltip);
 			updatesystray();
 			drawbars();
 		}
@@ -4187,11 +4250,14 @@ ui_tick(void)
 	}
 	if (can_animate)
 		frame = tick + 0.016;
+	double tooltip_next = system_tooltip_tick(tick);
 	int timeout = animating || panel_animating ? MAX(1, (int)ceil((frame-tick)*1000)) : 1000;
 	if (timer.active)
 		timeout = MIN(timeout, MAX(1, (int)ceil(1000*shell_timer_remaining(&timer, now, tick))));
 	if (system_next)
 		timeout = MIN(timeout, MAX(1, (int)ceil((system_next-tick)*1000)));
+	if (tooltip_next)
+		timeout = MIN(timeout, MAX(1, (int)ceil((tooltip_next-tick)*1000)));
 	return timeout;
 }
 

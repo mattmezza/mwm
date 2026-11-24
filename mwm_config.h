@@ -37,6 +37,7 @@ typedef struct {
 	int nsegments, custom_segments;
 	int timerprogressheight;
 	int cpu_interval, cpu_history, cpu_width, ram_history, ram_width;
+	int load_width, tooltip_delay;
 	int showsystray, showtraybar, systraymon, systrayspacing, systrayvertpad;
 	int panelradius, panel_opacity, calendar_width, clock_width, palette_width;
 	int duration, reduced_motion, shadows, shadow_opacity, bar_shadow_blur, panel_shadow_blur;
