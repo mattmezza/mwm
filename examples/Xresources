@@ -37,7 +37,7 @@ mwm.barbgalpha:      0x00
 ! mwm.statusbgalpha: 0xff
 
 ! geometry / spacing
-mwm.borderpx:        2
+mwm.borderpx:        3
 mwm.gappx:           10
 mwm.cornerradius:    3
 mwm.segradius:       6

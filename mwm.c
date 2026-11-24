@@ -3613,7 +3613,8 @@ restore_client(const RestartClient *saved)
 	c->tag = saved->tag;
 	c->x = saved->x; c->y = saved->y; c->w = saved->w; c->h = saved->h;
 	c->oldx = saved->oldx; c->oldy = saved->oldy; c->oldw = saved->oldw; c->oldh = saved->oldh;
-	c->bw = saved->bw; c->oldbw = saved->oldbw;
+	c->bw = saved->fullscreen ? 0 : settings.borderpx;
+	c->oldbw = saved->fullscreen ? settings.borderpx : saved->oldbw;
 	c->isfloating = saved->floating;
 	c->isfullscreen = saved->fullscreen;
 	c->issticky = saved->sticky;
@@ -3633,6 +3634,7 @@ restore_client(const RestartClient *saved)
 	}
 	XSelectInput(dpy, c->win, EnterWindowMask | FocusChangeMask | PropertyChangeMask | StructureNotifyMask);
 	unfocus(c, 0);
+	XSetWindowBorderWidth(dpy, c->win, c->bw);
 	XMoveResizeWindow(dpy, c->win, ISVISIBLE(c) ? c->x : -2 * WIDTH(c), c->y, c->w, c->h);
 	if (settings.roundcorners && !c->isfullscreen)
 		roundwin(c->win, c->w, c->h, settings.cornerradius, c->bw);

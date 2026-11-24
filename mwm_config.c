@@ -28,7 +28,7 @@ config_defaults(Config *c)
 		{.type = "TOOLBAR", .floating = 1}, {.type = "SPLASH", .floating = 1},
 	};
 	*c = (Config){
-		.borderpx = 2, .gappx = 8, .cornerradius = 3, .focusfollowsmouse = 1,
+		.borderpx = 3, .gappx = 8, .cornerradius = 3, .focusfollowsmouse = 1,
 		.warpcursor = 1, .movemod = Mod4Mask, .snap = 8,
 		.defaultlayout = 1, .nmaster = 1, .mfact = 0.5f,
 		.topbar = 1, .showbar = 1, .barvertpad = 6, .barpadx = 12,
