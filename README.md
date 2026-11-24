@@ -262,6 +262,11 @@ The profile also shows how to apply a panel shader with GLX.
 [picom profile](examples/picom.conf) · [Panel shader](examples/panel-sheen.glsl)
 
 The XEmbed tray uses the bar's status colors and follows the focused monitor.
+Apps that support symbolic tray colors use `mwm.selbg` as their icon accent,
+with `mwm.systemwarn`, `mwm.systemdanger`, and `mwm.traysuccess` for status colors.
+Run `mwmc reload` to publish the palette to docked apps. A cached icon can pick
+up the new colors the next time the app updates its image. Full-color icons
+keep their original colors.
 Set `systraymon` in `[tray]` to pin it to a zero-based monitor index.
 The whole bar slides in from its screen edge and reverses the motion to close.
 Individual segments can also slide open and closed. Adjust timing with

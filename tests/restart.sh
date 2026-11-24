@@ -57,6 +57,22 @@ tray_docked() {
     xprop -id "$parent" WM_CLASS | grep -F 'mwm-tray'
 }
 eventually tray_docked
+tray_colors() {
+    xprop -id "$1" -f _NET_SYSTEM_TRAY_COLORS 32x _NET_SYSTEM_TRAY_COLORS |
+        grep -Fx "_NET_SYSTEM_TRAY_COLORS(CARDINAL) = $2"
+}
+tray_docked >/dev/null
+tray_before=$parent
+tray_colors "$tray_before" '0x7a7a, 0xa2a2, 0xf7f7, 0xffff, 0x5252, 0x6666, 0xe0e0, 0xafaf, 0x6868, 0x9e9e, 0xcece, 0x6a6a'
+xprop -root -f RESOURCE_MANAGER 8s -set RESOURCE_MANAGER 'mwm.selbg: #123456
+mwm.systemdanger: #de3041
+mwm.systemwarn: #c98720
+mwm.traysuccess: #2aaf79'
+"$control" reload
+tray_docked >/dev/null
+test "$parent" = "$tray_before"
+reloaded_colors='0x1212, 0x3434, 0x5656, 0xdede, 0x3030, 0x4141, 0xc9c9, 0x8787, 0x2020, 0x2a2a, 0xafaf, 0x7979'
+tray_colors "$tray_before" "$reloaded_colors"
 
 "$control" gap 31
 "$control" layout stack
@@ -76,6 +92,8 @@ for topic in windows tags monitors state; do
 done
 xwininfo -id "$(cat "$dir/first")" | diff -u "$dir/geometry" -
 xwininfo -id "$(cat "$dir/icon")" | grep 'IsUnviewable'
+tray_docked >/dev/null
+tray_colors "$parent" "$reloaded_colors"
 "$control" traybar show
 tray_viewable() {
     xwininfo -id "$(cat "$dir/icon")" | grep -q 'IsViewable'

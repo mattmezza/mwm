@@ -38,5 +38,8 @@ mwm.titlebg:    {{background}}
 mwm.statusfg:   {{foreground}}
 mwm.statusbg:   {{background}}
 
+! success color for symbolic tray icons (regular foreground uses mwm.selbg)
+mwm.traysuccess:  {{color2}}
+
 ! bar background strip (raise mwm.barbgalpha in config/Xresources for a solid bar)
 mwm.barbg:      {{background}}

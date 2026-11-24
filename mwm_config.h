@@ -56,6 +56,8 @@ typedef struct {
 	cui_color palette[SchemeLast][3];
 	char usage_colors[UsageColorCount][64];
 	cui_color usage_palette[UsageColorCount];
+	char tray_success_color[64];
+	cui_color tray_success;
 	char tags[MAX_TAGS][64];
 	int tagmon[MAX_TAGS], ntags;
 	Rule rules[MAX_RULES];

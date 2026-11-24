@@ -59,7 +59,7 @@
 enum { CurNormal, CurResize, CurMove, CurLast }; /* cursor */
 enum { NetSupported, NetWMName, NetWMState, NetWMCheck,
        NetSystemTray, NetSystemTrayOP, NetSystemTrayOrientation, NetSystemTrayOrientationHorz,
-       NetSystemTrayVisual, NetWMWindowType, NetWMWindowTypeDock, NetWMWindowTypeDialog,
+       NetSystemTrayVisual, NetSystemTrayColors, NetWMWindowType, NetWMWindowTypeDock, NetWMWindowTypeDialog,
        NetWMFullscreen, NetActiveWindow, NetWMStateDemandsAttention, NetClientList, NetLast };
 enum { Manager, Xembed, XembedInfo, XLast }; /* Xembed atoms */
 enum { WMProtocols, WMDelete, WMState, WMTakeFocus, WMLast }; /* default atoms */
@@ -2763,6 +2763,22 @@ updatesystrayiconstate(Client *i, XPropertyEvent *ev)
 	XFree(data);
 }
 
+static void
+setsystraycolors(void)
+{
+	/* XEmbed symbolic icon hint: foreground, error, warning, success in 16-bit RGB. */
+	const cui_color colors[] = {settings.palette[SchemeSel][ColBg], settings.usage_palette[UsageDanger],
+	                            settings.usage_palette[UsageWarning], settings.tray_success};
+	unsigned long rgb[3 * LENGTH(colors)];
+	for (size_t i = 0; i < LENGTH(colors); ++i) {
+		rgb[3*i] = colors[i].r * 257UL;
+		rgb[3*i + 1] = colors[i].g * 257UL;
+		rgb[3*i + 2] = colors[i].b * 257UL;
+	}
+	XChangeProperty(dpy, systray->win, netatom[NetSystemTrayColors], XA_CARDINAL, 32,
+	                PropModeReplace, (unsigned char *)rgb, LENGTH(rgb));
+}
+
 void
 updatesystray(void)
 {
@@ -2807,6 +2823,7 @@ updatesystray(void)
 		}
 		XChangeProperty(dpy, systray->win, netatom[NetWMWindowType], XA_ATOM, 32,
 		                PropModeReplace, (unsigned char *)&netatom[NetWMWindowTypeDock], 1);
+		setsystraycolors();
 		XSetSelectionOwner(dpy, netatom[NetSystemTray], systray->win, CurrentTime);
 		if (XGetSelectionOwner(dpy, netatom[NetSystemTray]) == systray->win) {
 			sendevent(root, xatom[Manager], StructureNotifyMask, CurrentTime, netatom[NetSystemTray], systray->win, 0, 0);
@@ -3535,9 +3552,11 @@ applystyle(const Config *next)
 		if (settings.movemod != old_modifier)
 			grabbuttons(c, selected && clientmon(c) == selmon);
 	}
-	if (systray)
+	if (systray) {
+		setsystraycolors();
 		for (Client *i = systray->icons; i; i = i->next)
 			updatesystrayicongeom(i, i->w, i->h);
+	}
 	updatebars();
 	updatesystray();
 	arrange(NULL);
@@ -3627,6 +3646,7 @@ setup(const RestartState *state)
 	netatom[NetSystemTrayOrientation] = XInternAtom(dpy, "_NET_SYSTEM_TRAY_ORIENTATION", False);
 	netatom[NetSystemTrayOrientationHorz] = XInternAtom(dpy, "_NET_SYSTEM_TRAY_ORIENTATION_HORZ", False);
 	netatom[NetSystemTrayVisual] = XInternAtom(dpy, "_NET_SYSTEM_TRAY_VISUAL", False);
+	netatom[NetSystemTrayColors] = XInternAtom(dpy, "_NET_SYSTEM_TRAY_COLORS", False);
 	netatom[NetWMName] = XInternAtom(dpy, "_NET_WM_NAME", False);
 	netatom[NetWMState] = XInternAtom(dpy, "_NET_WM_STATE", False);
 	netatom[NetWMStateDemandsAttention] = XInternAtom(dpy, "_NET_WM_STATE_DEMANDS_ATTENTION", False);

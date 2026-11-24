@@ -58,6 +58,7 @@ config_defaults(Config *c)
 		},
 		.alpha = {255, 255, 255, 255, 255, 0},
 		.usage_colors = {[UsageWarning] = "#e0af68", [UsageDanger] = "#ff5266"},
+		.tray_success_color = "#9ece6a",
 		.ntags = COUNT(tags), .nrules = COUNT(rules),
 		.in_presets = {5, 10, 15, 20, 30, 45, 60, 90, 120, 150, 180, 240, 360, 480, 720},
 		.nin_presets = 15, .at_presets = 12,
@@ -148,6 +149,7 @@ static const Setting settings[] = {
 	STR("theme", "statusfg", colors[SchemeStatus][ColFg]), STR("theme", "statusbg", colors[SchemeStatus][ColBg]),
 	STR("theme", "barbg", colors[SchemeBar][ColBg]),
 	STR("theme", "systemwarn", usage_colors[UsageWarning]), STR("theme", "systemdanger", usage_colors[UsageDanger]),
+	STR("theme", "traysuccess", tray_success_color),
 	INT("theme", "normbgalpha", alpha[SchemeNorm], 0, 255), INT("theme", "selbgalpha", alpha[SchemeSel], 0, 255),
 	INT("theme", "urgbgalpha", alpha[SchemeUrg], 0, 255), INT("theme", "titlebgalpha", alpha[SchemeTitle], 0, 255),
 	INT("theme", "statusbgalpha", alpha[SchemeStatus], 0, 255), INT("theme", "barbgalpha", alpha[SchemeBar], 0, 255),
@@ -628,5 +630,5 @@ config_theme(Config *c, Display *dpy, Window root, Colormap cmap, char error[CON
 			                 &c->palette[i][j], error);
 	for (int i = 0; ok && i < UsageColorCount; ++i)
 		ok = theme_color(dpy, cmap, c->usage_colors[i], 255, &c->usage_palette[i], error);
-	return ok;
+	return ok && theme_color(dpy, cmap, c->tray_success_color, 255, &c->tray_success, error);
 }
