@@ -109,7 +109,7 @@ typedef struct {
 typedef struct Systray {
 	Window win;
 	Client *icons;
-	int monitor, width, height, clip_width, mapped;
+	int monitor, x, y, width, height, clip_width, mapped;
 	unsigned long bg;
 } Systray;
 
@@ -323,6 +323,8 @@ static ShellHost shell;
 static ShellFont shellfont;
 static ShellPanel panel;
 static ShellTimer timer;
+static ShellSystem system_stats;
+static double cpu_next;
 static unsigned int theme_revision;
 static const char *config_path;
 static int required_config;
@@ -1628,7 +1630,7 @@ paintbar(Monitor *m, time_t now, double tick)
 		.pad = shell_bar_inset(&settings),
 		.tray_width = tray_width, .tray_shown = tray_width && systrayvisible && settings.showsystray,
 		.tag = m->seltag, .layout = m->seltag < 0 ? -1 : tagstate[m->seltag].layout,
-		.title = m->sel ? m->sel->name : "", .status = stext,
+		.title = m->sel ? m->sel->name : "", .status = stext, .system = &system_stats,
 	};
 	int urgency[MAX_TAGS] = {0}, occupancy[MAX_TAGS] = {0};
 	for (Client *c = clients; c; c = c->next) {
@@ -1645,6 +1647,15 @@ paintbar(Monitor *m, time_t now, double tick)
 	}
 	shell_bar_draw(&shell, &shellfont, theme_revision, &settings, &m->bar,
 	               m->barwin, &state, &timer, now, tick);
+	if (owns_tray && m->bar.tray_width) {
+		int x = m->mx + m->bar.tray_x + m->bar.tray_width - lrpad/2 - systray->width;
+		int y = m->by + state.pad + settings.systrayvertpad;
+		if (x != systray->x || y != systray->y) {
+			systray->x = x;
+			systray->y = y;
+			XMoveWindow(dpy, systray->win, x, y);
+		}
+	}
 	if (owns_tray)
 		painttray(m->bar.tray_width);
 }
@@ -2480,7 +2491,7 @@ updateclientlist(void)
 
 /* ---- system tray ----------------------------------------------------- */
 
-/* Clip the XEmbed strip with the right-anchored segment as it opens or closes.
+/* Clip the XEmbed strip to the tray segment as it opens or closes.
  * Only its container is unmapped. The icon windows stay docked and mapped. */
 static void
 painttray(int segment_width)
@@ -2616,12 +2627,14 @@ updatesystray(void)
 	if (!systray) {
 		systray = ecalloc(1, sizeof(Systray));
 		systray->monitor = -1;
+		systray->x = m->mx + m->mw;
+		systray->y = m->by;
 		systray->bg = traybg;
 		wa.override_redirect = True;
 		wa.event_mask = ButtonPressMask | SubstructureNotifyMask;
 		wa.background_pixel = traybg;
 		wa.border_pixel = 0;
-		systray->win = XCreateWindow(dpy, root, m->mx + m->mw, m->by, 1, bh, 0,
+		systray->win = XCreateWindow(dpy, root, systray->x, systray->y, 1, bh, 0,
 		                             DefaultDepth(dpy, screen), InputOutput,
 		                             DefaultVisual(dpy, screen),
 		                             CWOverrideRedirect | CWEventMask | CWBackPixel | CWBorderPixel, &wa);
@@ -2650,6 +2663,7 @@ updatesystray(void)
 	}
 	if (systray->monitor != m->num) {
 		systray->monitor = m->num;
+		painttray(0);
 		drawbars();
 	}
 
@@ -2673,9 +2687,7 @@ updatesystray(void)
 	if (!w || !barvisible || !settings.showsystray)
 		painttray(0);
 	else {
-		int x = m->mx + m->mw - MIN(settings.barmargin, m->mw / 8) - lrpad / 2 - w;
-		XMoveResizeWindow(dpy, systray->win, x, m->by + inset, w, height);
-		painttray(m->bar.tray_width);
+		XResizeWindow(dpy, systray->win, w, height);
 		if (systray->mapped)
 			XRaiseWindow(dpy, systray->win);
 	}
@@ -3180,6 +3192,8 @@ applystyle(const Config *next)
 		shell_surface_free(&shell, &m->bar.surface);
 	shell_font_free(&shellfont);
 	shellfont = font;
+	if (settings.cpu_interval != next->cpu_interval)
+		cpu_next = 0;
 	settings = *next;
 	++theme_revision;
 	lrpad = 2 * MAX(5, settings.barpadx);
@@ -4019,6 +4033,61 @@ panel_event(XEvent *e)
 }
 
 static int
+cpu_visible(void)
+{
+	if (barvisible)
+		for (int i = 0; i < settings.nsegments; ++i)
+			if (settings.segments[i].segment == BarSystem)
+				return 1;
+	return 0;
+}
+
+static void
+sample_cpu(double tick)
+{
+	static unsigned long long last_total, last_idle;
+	static int have_baseline;
+	if (!cpu_next) {
+		have_baseline = 0;
+		system_stats.count = 0;
+	}
+	cpu_next = tick + settings.cpu_interval / 1000.0;
+
+	unsigned long long user, nice, system, idle, iowait, irq, softirq, steal;
+	char line[512];
+	FILE *file = fopen("/proc/stat", "r");
+	int ok = file && fgets(line, sizeof line, file) && !strncmp(line, "cpu ", 4) &&
+	         sscanf(line + 4, "%llu %llu %llu %llu %llu %llu %llu %llu",
+	                &user, &nice, &system, &idle, &iowait, &irq, &softirq, &steal) == 8;
+	if (file)
+		fclose(file);
+	if (!ok) {
+		if (system_stats.count)
+			drawbars();
+		system_stats.count = 0;
+		have_baseline = 0;
+		return;
+	}
+	idle += iowait;
+	unsigned long long total = user + nice + system + idle + irq + softirq + steal;
+	if (have_baseline && total > last_total && idle >= last_idle &&
+	    idle - last_idle <= total - last_total) {
+		double usage = 100.0 * (1.0 - (double)(idle - last_idle) / (total - last_total));
+		if (system_stats.count == MAX_CPU_SAMPLES) {
+			--system_stats.count;
+			memmove(system_stats.cpu, system_stats.cpu + 1,
+			        system_stats.count * sizeof system_stats.cpu[0]);
+		}
+		system_stats.cpu[system_stats.count++] = (cui_chart_datum){.value = usage};
+		++system_stats.revision;
+		drawbars();
+	}
+	last_total = total;
+	last_idle = idle;
+	have_baseline = 1;
+}
+
+static int
 ui_tick(void)
 {
 	static time_t minute = -1, second = -1, checked_compositor = -1;
@@ -4058,6 +4127,10 @@ ui_tick(void)
 		panel_dirty |= panel.win && panel.kind == ActClock;
 	}
 	second = now;
+	if (!cpu_visible())
+		cpu_next = 0;
+	else if (tick >= cpu_next)
+		sample_cpu(tick);
 
 	int can_animate = tick >= frame;
 	int animating = 0;
@@ -4082,6 +4155,8 @@ ui_tick(void)
 	int timeout = animating || panel_animating ? MAX(1, (int)ceil((frame-tick)*1000)) : 1000;
 	if (timer.active)
 		timeout = MIN(timeout, MAX(1, (int)ceil(1000*shell_timer_remaining(&timer, now, tick))));
+	if (cpu_next)
+		timeout = MIN(timeout, MAX(1, (int)ceil((cpu_next-tick)*1000)));
 	return timeout;
 }
 

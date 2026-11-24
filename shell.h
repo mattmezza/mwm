@@ -2,6 +2,7 @@
 #define MWM_SHELL_H
 
 #include "mwm_config.h"
+#include "cui/cui_chart.h"
 #include "cui/cui_software.h"
 
 typedef struct {
@@ -24,7 +25,7 @@ typedef struct {
 	XImage *image;
 	GC gc;
 	unsigned revision;
-	cui_rect shapes[5];
+	cui_rect shapes[BarSegmentCount];
 	int shape_count, shape_radius, shape_outset;
 } ShellSurface;
 
@@ -46,6 +47,14 @@ typedef struct {
 	double started;
 } ShellReveal;
 
+enum { CPU_CHART_HEIGHT = 22 };
+
+typedef struct {
+	cui_chart_datum cpu[MAX_CPU_SAMPLES];
+	int count;
+	uint64_t revision;
+} ShellSystem;
+
 typedef struct {
 	ShellSurface surface;
 	ShellHit hits[MAX_TAGS + 5];
@@ -58,7 +67,9 @@ typedef struct {
 	double transition, last_frame;
 	int animating;
 	ShellReveal tray_reveal, status_reveal, title_reveal;
-	int tray_width;
+	int tray_x, tray_width;
+	cui_chart_state cpu_chart;
+	unsigned char cpu_pixels[MAX_CPU_WIDTH * CPU_CHART_HEIGHT * 4];
 	char status[512], title[256];
 } ShellBar;
 
@@ -72,6 +83,7 @@ typedef struct {
 	int tag, ntags, layout;
 	ShellTag tags[MAX_TAGS];
 	const char *title, *status;
+	const ShellSystem *system;
 } ShellBarModel;
 
 typedef struct {

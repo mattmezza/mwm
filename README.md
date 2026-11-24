@@ -201,6 +201,10 @@ The default config assigns tag 1 to monitor 0. Set `1 = -1` under
 
 - Click a tag to view it. Scroll over the tag group to cycle tags. The layout
   button cycles forwards with a left click and backwards with a right click.
+- The system segment shows aggregate CPU usage and a live history graph in
+  the Xresources accent color. The default history spans about 10 seconds at
+  one sample every 250 ms. Set the interval, sample count, and graph width
+  under `[system]`.
 - Click the date for the monthly calendar. The arrows or Left and Right change
   the month. **Today** or Home returns to the current month.
 - Click the time to see local time and the configured world clocks. Choose
@@ -231,6 +235,16 @@ Set `systraymon` in `[tray]` to pin it to a zero-based monitor index.
 The tray, title, and status segments slide open and closed. Adjust their
 timing with `duration` in `[motion]`, or enable `reduced_motion` to switch
 between states immediately.
+
+Set `segments` under `[bar]` to arrange the left, center, and right groups.
+Order each comma-separated group from left to right and omit any segment to
+hide it. The tags segment includes the layout icon. The datetime segment
+includes both the date and clock.
+
+```ini
+[bar]
+segments = tags, title | | status, system, datetime, tray
+```
 
 ## Configuration
 

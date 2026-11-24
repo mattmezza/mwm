@@ -32,8 +32,12 @@ config_defaults(Config *c)
 		.warpcursor = 1, .movemod = Mod4Mask, .snap = 8,
 		.defaultlayout = 1, .nmaster = 1, .mfact = 0.5f,
 		.topbar = 1, .showbar = 1, .barvertpad = 6, .barpadx = 12,
-		.barmargin = 6, .barvmargin = 6, .barseggap = 10, .segradius = 6, .barfontsize = 16,
+		.barmargin = 6, .barvmargin = 6, .barseggap = 10, .segradius = 6, .tagradius = 3, .barfontsize = 16,
+		.segments = {{BarTags, BarLeft}, {BarTitle, BarLeft}, {BarStatus, BarRight},
+		             {BarSystem, BarRight}, {BarDatetime, BarRight}, {BarTray, BarRight}},
+		.nsegments = BarSegmentCount,
 		.timerprogressheight = 2,
+		.cpu_interval = 250, .cpu_history = 40, .cpu_width = 88,
 		.showsystray = 1, .showtraybar = 1, .systraymon = -1, .systrayspacing = 7, .systrayvertpad = 6,
 		.panelradius = 6, .panel_opacity = 255, .calendar_width = 394, .clock_width = 448, .palette_width = 530,
 		.duration = 150, .shadows = 1, .shadow_opacity = 112, .bar_shadow_blur = 2, .panel_shadow_blur = 6,
@@ -78,8 +82,12 @@ static const Setting settings[] = {
 	INT("bar", "barpadx", barpadx, 0, 32), INT("bar", "barmargin", barmargin, 0, 48),
 	INT("bar", "barvmargin", barvmargin, 0, 48), INT("bar", "barseggap", barseggap, 0, 32),
 	INT("bar", "segradius", segradius, 0, 32), INT("bar", "titlealign", titlealign, 0, 2),
+	INT("bar", "tagradius", tagradius, 0, 32),
 	INT("bar", "barfontsize", barfontsize, 0, 28),
 	INT("bar", "timerprogressheight", timerprogressheight, 0, 5),
+	INT("system", "cpu_interval", cpu_interval, 100, 60000),
+	INT("system", "cpu_history", cpu_history, 2, MAX_CPU_SAMPLES),
+	INT("system", "cpu_width", cpu_width, 32, MAX_CPU_WIDTH),
 	INT("tray", "showsystray", showsystray, 0, 1), INT("tray", "showtraybar", showtraybar, 0, 1),
 	INT("tray", "systraymon", systraymon, -1, 99), INT("tray", "systrayspacing", systrayspacing, 0, 24),
 	INT("tray", "systrayvertpad", systrayvertpad, 0, 24),
@@ -264,7 +272,35 @@ read_presets(Config *c, const char *value)
 }
 
 static int
-read_value(Config *c, const char *section, const char *key, const char *v, Rule *rule)
+read_segments(Config *c, char *value)
+{
+	const char *names[] = {"tags", "title", "status", "system", "datetime", "tray"};
+	unsigned seen = 0;
+	c->nsegments = 0;
+	for (enum BarAlign align = BarLeft; align < BarAlignCount; ++align) {
+		char *group = strsep(&value, "|");
+		if (!group)
+			return 0;
+		group = trim(group);
+		while (*group) {
+			char *name = trim(strsep(&group, ","));
+			int id = 0;
+			while (id < BarSegmentCount && strcmp(name, names[id]))
+				++id;
+			if (id == BarSegmentCount || (seen & (1u << id)) || (group && !*trim(group)))
+				return 0;
+			seen |= 1u << id;
+			c->segments[c->nsegments++] = (BarPlacement){id, align};
+			if (!group)
+				break;
+		}
+	}
+	c->custom_segments = 1;
+	return value == NULL;
+}
+
+static int
+read_value(Config *c, const char *section, const char *key, char *v, Rule *rule)
 {
 	int id;
 	if (rule)
@@ -278,6 +314,8 @@ read_value(Config *c, const char *section, const char *key, const char *v, Rule 
 		return integer(v, -1, 99, &c->tagmon[id - 1]);
 	if (!strcmp(section, "clock") && !strcmp(key, "in_presets"))
 		return read_presets(c, v);
+	if (!strcmp(section, "bar") && !strcmp(key, "segments"))
+		return read_segments(c, v);
 	if (!strcmp(section, "timezones")) {
 		for (id = 0; id < c->nzones; ++id)
 			if (!strcmp(c->zones[id].label, key))
@@ -355,7 +393,7 @@ config_read(Config *c, const char *path, int required, char error[CONFIG_ERROR])
 				rule = &c->rules[c->nrules++];
 				*rule = (Rule){.floating = -1};
 			} else {
-				const char *sections[] = {"bar", "layout", "theme", "motion", "tray", "panels", "clock",
+				const char *sections[] = {"bar", "layout", "theme", "motion", "tray", "panels", "clock", "system",
 				                          "timezones", "tags", "tag_monitors"};
 				size_t i = 0;
 				while (i < COUNT(sections) && strcmp(section, sections[i]))

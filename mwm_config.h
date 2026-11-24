@@ -6,8 +6,16 @@
 #include <time.h>
 
 enum { MAX_TAGS = 100, MAX_RULES = 64, MAX_ZONES = 8, MAX_TIMER_PRESETS = 5, CONFIG_ERROR = 768 };
+enum { MAX_CPU_SAMPLES = 120, MAX_CPU_WIDTH = 200 };
 enum { SchemeNorm, SchemeSel, SchemeUrg, SchemeTitle, SchemeStatus, SchemeBar, SchemeLast };
 enum { ColFg, ColBg, ColBorder };
+enum BarSegment { BarTags, BarTitle, BarStatus, BarSystem, BarDatetime, BarTray, BarSegmentCount };
+enum BarAlign { BarLeft, BarCenter, BarRight, BarAlignCount };
+
+typedef struct {
+	enum BarSegment segment;
+	enum BarAlign align;
+} BarPlacement;
 
 typedef struct {
 	char class[64], instance[64], title[128], tag[64], type[64];
@@ -23,8 +31,11 @@ typedef struct {
 	int warpcursor, movemod, snap, defaultlayout, nmaster;
 	float mfact;
 	int topbar, showbar, barheight, barvertpad, barpadx, barmargin, barvmargin;
-	int barseggap, segradius, titlealign, barfontsize;
+	int barseggap, segradius, tagradius, titlealign, barfontsize;
+	BarPlacement segments[BarSegmentCount];
+	int nsegments, custom_segments;
 	int timerprogressheight;
+	int cpu_interval, cpu_history, cpu_width;
 	int showsystray, showtraybar, systraymon, systrayspacing, systrayvertpad;
 	int panelradius, panel_opacity, calendar_width, clock_width, palette_width;
 	int duration, reduced_motion, shadows, shadow_opacity, bar_shadow_blur, panel_shadow_blur;
