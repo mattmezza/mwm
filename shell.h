@@ -15,6 +15,7 @@ typedef struct {
 typedef struct {
 	cui_font *font;
 	float size;
+	cui_font *medium, *mono;
 } ShellFont;
 
 typedef struct {
@@ -23,6 +24,8 @@ typedef struct {
 	XImage *image;
 	GC gc;
 	unsigned revision;
+	cui_rect shapes[5];
+	int shape_count, shape_radius, shape_outset;
 } ShellSurface;
 
 enum ShellAction {
@@ -75,7 +78,7 @@ typedef struct {
 	Window win;
 	enum ShellAction kind;
 	int monitor, width, height, pad, year, month;
-	int zone_start, zone_rows, at, selected;
+	int zone_start, zone_rows, at, selected, cursor;
 	int hover_x, hover_y;
 	ShellHit hits[24];
 	int nhits;
@@ -90,12 +93,13 @@ typedef struct {
 } ShellTimer;
 
 int shell_font(ShellFont *, const Config *, char error[CONFIG_ERROR]);
+void shell_font_free(ShellFont *);
+void shell_font_license(void);
 void shell_surface_free(const ShellHost *, ShellSurface *);
 void shell_icons_free(void);
-void shell_tray_draw(const ShellHost *, const ShellFont *, unsigned, const Config *,
-                     ShellSurface *, Window, int w, int h, int pad);
 double shell_seconds(void);
 int shell_composited(const ShellHost *);
+int shell_bar_inset(const Config *);
 ShellHit shell_hit(const ShellHit *, int count, int x, int y);
 void shell_bar_draw(const ShellHost *, const ShellFont *, unsigned revision,
                     const Config *, ShellBar *, Window, const ShellBarModel *,

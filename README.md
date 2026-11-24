@@ -58,7 +58,7 @@ The installer checks both executables against the release's SHA-256 manifest
 and installs them in `~/.local/bin`. Put that directory on your `PATH` before
 starting mwm. To upgrade a different installation, set `MWM_BIN_DIR` to its
 existing bin directory. The binaries are statically linked and use your X11
-server, installed fonts, and system time-zone data.
+server and system time-zone data.
 
 After updating the binary at the path used by your running session, run
 `mwmc restart` to load it in place. You can combine installation and restart
@@ -83,13 +83,15 @@ make
 sudo make install
 ```
 
-Install Geist and Geist Mono through your font manager for the default design.
-Fontconfig supplies fallback fonts. To build without Xinerama, comment out the
-two `XINERAMA*` lines in `config.mk`.
+mwm defaults to 18 px Geist and uses Geist Mono for tabular text. It embeds
+both families from [Geist v1.9.2](https://github.com/vercel/geist-font/releases/tag/v1.9.2)
+and uses Fontconfig to look up installed faces and fallback glyphs.
+Run `mwm --font-license` to read the bundled fonts' license. To build without
+Xinerama, comment out the two `XINERAMA*` lines in `config.mk`.
 
 ### Publish a release
 
-Commit the changes you want to ship, then run `make release name=v0.1.0`.
+Commit the changes you want to ship, then run `make release name=v0.1.1`.
 Release tags use `vMAJOR.MINOR.PATCH`.
 The target tags the current commit and pushes the tag to `origin`. GitHub
 Actions builds and smoke-tests `mwm` and `mwmc` for Linux x86-64 and ARM64
@@ -203,9 +205,10 @@ The default config assigns tag 1 to monitor 0. Set `1 = -1` under
   the month. **Today** or Home returns to the current month.
 - Click the time to see local time and the configured world clocks. Choose
   **Alert me in** for a duration expressed as minutes, `HH:MM`, or `HH:MM:SS`,
-  or **Alert me at** for the next occurrence of a 24-hour local `HH:MM`. Press
-  Enter or click **Set**. The bar marks an active timer and the panel displays
-  its countdown and a Cancel button. One timer can be active at a time.
+  or **Alert me at** for the next occurrence of a 24-hour local `HH:MM`. The
+  timer field is ready to type when the panel opens. Use the number row or
+  keypad, then press Enter or click **Set**. The bar marks an active timer and
+  the panel displays its countdown and a Cancel button.
 - Click the focused title or run `mwmc palette` to search for windows by title or
   class, jump to tags, or change layouts. Use Up, Down, and Enter to select.
   Escape and outside clicks dismiss the panels.
@@ -214,12 +217,15 @@ The timer uses `notify-send` by default. Set `timer_hook` in `[clock]` to an
 executable path or command on `PATH`. The hook receives a title and body as
 two arguments. Timers survive configuration reloads and in-place WM restarts.
 
-mwm uses CUI to paint its bar and panels. An X11 compositor enables transparency
-and shadow pixels. The supplied [picom profile](examples/picom.conf) styles
-application windows and includes optional GLX effects and a
-[panel shader](examples/panel-sheen.glsl). Turn off `roundcorners` in
-`[layout]` when picom rounds client corners. Legacy XEmbed icons share an
-opaque tray surface using the same color, radius, and outline as the bar.
+mwm uses CUI to paint the bar, panels, and their shadows. With picom, apply the
+`class_g = 'mwm'` rule from the supplied profile so the compositor leaves mwm's
+transparency and shadows intact. For a legacy picom config, add the same match
+to `blur-background-exclude` and a `100:class_g = 'mwm'` entry to `opacity-rule`.
+The profile also shows how to apply a panel shader with GLX.
+[picom profile](examples/picom.conf) · [Panel shader](examples/panel-sheen.glsl)
+
+The XEmbed tray uses the bar's status colors and follows the focused monitor.
+Set `systraymon` in `[tray]` to pin it to a zero-based monitor index.
 
 ## Configuration
 
@@ -231,15 +237,17 @@ mwmc reload
 
 mwm loads `$XDG_CONFIG_HOME/mwm/config.ini` if XDG_CONFIG_HOME is set to an
 absolute path, or `~/.config/mwm/config.ini` otherwise. Use `mwm -c FILE` for
-a custom path. Unspecified settings use compiled defaults. See the
-[example INI](examples/config.ini) for theme, layout, motion, tray, zones,
-tags, and rule syntax. Zone values use IANA names such as `Europe/Zurich`.
+a custom path. The example INI lists every setting with its default commented
+out. Uncomment a value to customize it. Zone values use IANA names such as
+`Europe/Zurich`. [Example config.ini](examples/config.ini)
+
 Window rules match class, instance, title and/or window type. Later rules win
 per field, and a custom rule list replaces the built-in rules.
 
 `mwmc reload` validates the INI and prepares the new theme before applying it.
 Active layouts, tag ownership, focus, and explicit runtime gap and visibility
-changes are retained. Window rules apply to new clients. Tag-to-monitor rules
+changes are retained unless the corresponding visibility setting changes.
+Window rules apply to new clients. Tag-to-monitor rules
 seed startup and newly appearing monitors. A bad edit reports an error and
 keeps the last successful configuration.
 
@@ -250,8 +258,10 @@ within the existing X session. Popups close and reopen on demand.
 
 ### Xresources
 
-Xresources have priority over the INI for appearance. The bar, tray, calendar
-and clock share the same palette. `mwm.font` and `mwm.monofont` select Fontconfig
+Xresources have priority over the INI for colors, fonts, and bar geometry.
+The bar, tray, calendar and clock share the same palette. Remove any font
+resources from your Wallust template if you want to manage fonts in config.ini.
+`mwm.font` and `mwm.monofont` select Fontconfig
 patterns. The existing `mwm.norm*`, `mwm.sel*`, `mwm.urg*`, `mwm.title*`,
 `mwm.status*`, and `mwm.barbg` colors and alpha keys still work.
 

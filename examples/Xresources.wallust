@@ -14,8 +14,7 @@
 ! you want them themed too.
 
 ! ---- mwm (matteo's window manager) ----
-mwm.font:       Geist:pixelsize=14
-mwm.monofont:   Geist Mono
+! Font patterns can be set in config.ini.
 
 mwm.normfg:     {{foreground}}
 mwm.normbg:     {{background}}

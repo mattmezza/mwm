@@ -3,7 +3,7 @@
 ! Then run mwmc reload. Unset resources keep the config.ini or compiled default.
 ! Colors are #rrggbb; alphas accept 0xNN or decimal (0..255); mfact is a float.
 
-mwm.font:            Geist:pixelsize=14
+mwm.font:            Geist:pixelsize=18
 mwm.monofont:        Geist Mono
 
 ! left pill + normal tags
@@ -30,20 +30,20 @@ mwm.barbg:           #16161e
 mwm.barbgalpha:      0x00
 
 ! pill background translucency (needs a compositor to actually show)
-mwm.normbgalpha:     0xc0
-mwm.selbgalpha:      0xe0
-mwm.urgbgalpha:      0xe0
-mwm.titlebgalpha:    0xa0
-mwm.statusbgalpha:   0xa0
+! mwm.normbgalpha:   0xff
+! mwm.selbgalpha:    0xff
+! mwm.urgbgalpha:    0xff
+! mwm.titlebgalpha:  0xff
+! mwm.statusbgalpha: 0xff
 
 ! geometry / spacing
 mwm.borderpx:        2
 mwm.gappx:           10
-mwm.cornerradius:    5
-mwm.segradius:       11
-mwm.barpadx:         10
-mwm.barvertpad:      7
+mwm.cornerradius:    3
+mwm.segradius:       3
+mwm.barpadx:         12
+mwm.barvertpad:      8
 mwm.barmargin:       10
 mwm.barvmargin:      7
-mwm.barseggap:       8
+mwm.barseggap:       10
 mwm.mfact:           0.55

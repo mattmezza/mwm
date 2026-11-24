@@ -4,6 +4,7 @@ mwmc
 *.o
 config.h
 completions.h
+font_assets.h
 *.tar.gz
 
 # Vagrant

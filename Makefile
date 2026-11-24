@@ -19,6 +19,7 @@ all: mwm mwmc
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $<
 
 mwm.o shell.o mwm_config.o: $(CUI_READY) shell.h mwm_config.h
+shell.o: font_assets.h
 mwm.o mwmc.o util.o: util.h config.mk
 mwm.o mwmc.o: ipc.h
 
@@ -55,8 +56,16 @@ completions.h: completions/mwmc.bash completions/mwmc.zsh
 	printf ';\n'; \
 	} > $@
 
+font_assets.h: fonts/Geist-Regular.ttf fonts/Geist-Medium.ttf fonts/GeistMono-Regular.ttf fonts/OFL.txt
+	@set -e; for asset in $^; do \
+	    name=$$(basename "$$asset" | tr '.-' '__'); \
+	    printf 'static const unsigned char %s[] = {\n' "$$name"; \
+	    od -An -v -tu1 "$$asset" | awk '{ for (i = 1; i <= NF; ++i) printf "%s,", $$i; print "" }'; \
+	    printf '};\n'; \
+	done > $@
+
 clean:
-	rm -f mwm mwmc $(OBJ) mwmc.o completions.h mwm-$(VERSION).tar.gz
+	rm -f mwm mwmc $(OBJ) mwmc.o completions.h font_assets.h mwm-$(VERSION).tar.gz
 
 install: all
 	mkdir -p $(DESTDIR)$(PREFIX)/bin

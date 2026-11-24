@@ -28,13 +28,15 @@ config_defaults(Config *c)
 		{.type = "TOOLBAR", .floating = 1}, {.type = "SPLASH", .floating = 1},
 	};
 	*c = (Config){
-		.borderpx = 2, .gappx = 8, .cornerradius = 8, .focusfollowsmouse = 1,
+		.borderpx = 2, .gappx = 8, .cornerradius = 3, .focusfollowsmouse = 1,
 		.warpcursor = 1, .movemod = Mod4Mask, .snap = 8,
 		.defaultlayout = 1, .nmaster = 1, .mfact = 0.5f,
-		.topbar = 1, .showbar = 1, .barvertpad = 7, .barpadx = 10,
-		.barmargin = 10, .barvmargin = 7, .barseggap = 8, .segradius = 11, .titlealign = 1,
-		.showsystray = 1, .showtraybar = 1, .systrayspacing = 5, .systrayvertpad = 7,
-		.duration = 150, .shadows = 1, .font = "Geist:pixelsize=14", .monofont = "Geist Mono",
+		.topbar = 1, .showbar = 1, .barvertpad = 8, .barpadx = 12,
+		.barmargin = 10, .barvmargin = 7, .barseggap = 10, .segradius = 3, .titlealign = 1,
+		.showsystray = 1, .showtraybar = 1, .systraymon = -1, .systrayspacing = 7, .systrayvertpad = 6,
+		.panelradius = 4, .panel_opacity = 255, .calendar_width = 394, .clock_width = 448, .palette_width = 530,
+		.duration = 150, .shadows = 1, .shadow_opacity = 112, .bar_shadow_blur = 2, .panel_shadow_blur = 6,
+		.font = "Geist:pixelsize=18", .monofont = "Geist Mono",
 		.colors = {
 			[SchemeNorm]   = {"#c0caf5", "#1a1b26", "#3b4261"},
 			[SchemeSel]    = {"#1a1b26", "#7aa2f7", "#7aa2f7"},
@@ -43,7 +45,7 @@ config_defaults(Config *c)
 			[SchemeStatus] = {"#c0caf5", "#1a1b26", "#3b4261"},
 			[SchemeBar]    = {"#c0caf5", "#16161e", "#3b4261"},
 		},
-		.alpha = {235, 255, 255, 235, 235, 0},
+		.alpha = {255, 255, 255, 255, 255, 0},
 		.ntags = COUNT(tags), .nrules = COUNT(rules),
 	};
 	for (int i = 0; i < MAX_TAGS; ++i) {
@@ -75,10 +77,18 @@ static const Setting settings[] = {
 	INT("bar", "barvmargin", barvmargin, 0, 48), INT("bar", "barseggap", barseggap, 0, 32),
 	INT("bar", "segradius", segradius, 0, 32), INT("bar", "titlealign", titlealign, 0, 2),
 	INT("tray", "showsystray", showsystray, 0, 1), INT("tray", "showtraybar", showtraybar, 0, 1),
-	INT("tray", "systraymon", systraymon, 0, 99), INT("tray", "systrayspacing", systrayspacing, 0, 24),
+	INT("tray", "systraymon", systraymon, -1, 99), INT("tray", "systrayspacing", systrayspacing, 0, 24),
 	INT("tray", "systrayvertpad", systrayvertpad, 0, 24),
+	INT("panels", "radius", panelradius, 0, 32),
+	INT("panels", "opacity", panel_opacity, 0, 255),
+	INT("panels", "calendar_width", calendar_width, 300, 900),
+	INT("panels", "clock_width", clock_width, 340, 900),
+	INT("panels", "palette_width", palette_width, 360, 900),
 	INT("motion", "duration", duration, 0, 500), INT("motion", "reduced_motion", reduced_motion, 0, 1),
 	INT("motion", "shadows", shadows, 0, 1),
+	INT("motion", "shadow_opacity", shadow_opacity, 0, 255),
+	INT("motion", "bar_shadow_blur", bar_shadow_blur, 1, 5),
+	INT("motion", "panel_shadow_blur", panel_shadow_blur, 1, 12),
 	STR("clock", "timer_hook", hook), STR("theme", "font", font), STR("theme", "monofont", monofont),
 	STR("theme", "normfg", colors[SchemeNorm][ColFg]), STR("theme", "normbg", colors[SchemeNorm][ColBg]),
 	STR("theme", "normborder", colors[SchemeNorm][ColBorder]),
@@ -314,7 +324,7 @@ config_read(Config *c, const char *path, int required, char error[CONFIG_ERROR])
 				rule = &c->rules[c->nrules++];
 				*rule = (Rule){.floating = -1};
 			} else {
-				const char *sections[] = {"bar", "layout", "theme", "motion", "tray", "clock",
+				const char *sections[] = {"bar", "layout", "theme", "motion", "tray", "panels", "clock",
 				                          "timezones", "tags", "tag_monitors"};
 				size_t i = 0;
 				while (i < COUNT(sections) && strcmp(section, sections[i]))

@@ -12,6 +12,7 @@
 
 #include "cui/cui_icon.h"
 #include "cui/cui_text.h"
+#include "font_assets.h"
 
 #define COUNT(a) ((int)(sizeof(a) / sizeof((a)[0])))
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
@@ -69,40 +70,83 @@ match_font(const char *name, int weight)
 	return match;
 }
 
+static cui_font *
+open_face(const char *name, int weight, double *size)
+{
+	FcPattern *request = FcNameParse((const FcChar8 *)name);
+	FcChar8 *family = NULL, *matched = NULL, *file;
+	if (request)
+		FcPatternGetString(request, FC_FAMILY, 0, &family);
+	int geist = family && !FcStrCmpIgnoreCase(family, (const FcChar8 *)"Geist");
+	int geist_mono = family && !FcStrCmpIgnoreCase(family, (const FcChar8 *)"Geist Mono");
+	FcPattern *pattern = match_font(name, weight);
+	cui_font *font = NULL;
+	if (pattern) {
+		if (size)
+			FcPatternGetDouble(pattern, FC_PIXEL_SIZE, 0, size);
+		FcPatternGetString(pattern, FC_FAMILY, 0, &matched);
+		if (((!geist && !geist_mono) || (matched && !FcStrCmpIgnoreCase(family, matched)))
+		    && FcPatternGetString(pattern, FC_FILE, 0, &file) == FcResultMatch)
+			font = cui_font_open((char *)file);
+		FcPatternDestroy(pattern);
+	}
+	if (request) {
+		if (!font && size)
+			FcPatternGetDouble(request, FC_PIXEL_SIZE, 0, size);
+		FcPatternDestroy(request);
+	}
+	if (!font && geist_mono)
+		font = cui_font_open_memory(GeistMono_Regular_ttf, sizeof GeistMono_Regular_ttf);
+	if (!font && geist)
+		font = weight == FC_WEIGHT_MEDIUM
+		       ? cui_font_open_memory(Geist_Medium_ttf, sizeof Geist_Medium_ttf)
+		       : cui_font_open_memory(Geist_Regular_ttf, sizeof Geist_Regular_ttf);
+	return font;
+}
+
+void
+shell_font_free(ShellFont *font)
+{
+	cui_font_close(font->font);
+	cui_font_close(font->medium);
+	cui_font_close(font->mono);
+	*font = (ShellFont){0};
+}
+
+void
+shell_font_license(void)
+{
+	fwrite(OFL_txt, 1, sizeof OFL_txt, stdout);
+}
+
 int
 shell_font(ShellFont *out, const Config *config, char error[CONFIG_ERROR])
 {
-	double size = 13;
-	FcChar8 *file;
-	FcPattern *pattern = match_font(config->font, -1);
-	cui_font *font = NULL;
-	if (pattern && FcPatternGetString(pattern, FC_FILE, 0, &file) == FcResultMatch) {
-		font = cui_font_open((char *)file);
-		FcPatternGetDouble(pattern, FC_PIXEL_SIZE, 0, &size);
-	}
-	if (pattern)
-		FcPatternDestroy(pattern);
+	double size = 18;
+	cui_font *font = open_face(config->font, -1, &size);
 	if (!font) {
 		snprintf(error, CONFIG_ERROR, "cannot load font %s", config->font);
 		return 0;
 	}
-	const char *faces[] = {config->font, config->monofont, "sans-serif:lang=ja", "sans-serif:lang=ar",
-	                       "sans-serif:lang=hi", "sans-serif:lang=el", "sans-serif:lang=ru"};
-	char *fallbacks[5] = {0};
+	*out = (ShellFont){.font = font, .size = round(fmin(fmax(size, 9), 28)),
+	                   .medium = open_face(config->font, FC_WEIGHT_MEDIUM, NULL),
+	                   .mono = open_face(config->monofont, -1, NULL)};
+	cui_font_set_style(font, medium, out->medium);
+	cui_font_set_style(font, mono, out->mono);
+	const char *faces[] = {"sans-serif:lang=ja", "sans-serif:lang=ar", "sans-serif:lang=hi",
+	                       "sans-serif:lang=el", "sans-serif:lang=ru"};
+	char *fallbacks[COUNT(faces)] = {0};
 	int nfallbacks = 0;
 	for (int i = 0; i < COUNT(faces); ++i) {
-		pattern = match_font(faces[i], i == 0 ? FC_WEIGHT_MEDIUM : -1);
+		FcPattern *pattern = match_font(faces[i], -1);
+		FcChar8 *file;
 		if (pattern && FcPatternGetString(pattern, FC_FILE, 0, &file) == FcResultMatch) {
-			if (i < 2)
-				cui_font_register_style(font, i == 0 ? medium : mono, (char *)file);
-			else {
-				int j;
-				for (j = 0; j < nfallbacks; ++j)
-					if (!strcmp(fallbacks[j], (char *)file))
-						break;
-				if (j == nfallbacks && (fallbacks[j] = strdup((char *)file)))
-					++nfallbacks;
-			}
+			int j;
+			for (j = 0; j < nfallbacks; ++j)
+				if (!strcmp(fallbacks[j], (char *)file))
+					break;
+			if (j == nfallbacks && (fallbacks[j] = strdup((char *)file)))
+				++nfallbacks;
 		}
 		if (pattern)
 			FcPatternDestroy(pattern);
@@ -110,7 +154,6 @@ shell_font(ShellFont *out, const Config *config, char error[CONFIG_ERROR])
 	cui_font_register_fallbacks(font, (const char *const *)fallbacks, nfallbacks);
 	for (int i = 0; i < nfallbacks; ++i)
 		free(fallbacks[i]);
-	*out = (ShellFont){font, fmin(fmax(size, 9), 28)};
 	return 1;
 }
 
@@ -160,6 +203,7 @@ begin(const ShellHost *host, const ShellFont *font, unsigned revision, ShellSurf
 		if (surface->image)
 			XDestroyImage(surface->image);
 		surface->image = image;
+		surface->shape_count = -1;
 	}
 	if (!surface->gc)
 		surface->gc = XCreateGC(host->dpy, win, 0, NULL);
@@ -250,10 +294,16 @@ rounded(Display *dpy, Pixmap mask, GC gc, cui_rect box, int radius)
 }
 
 static void
-shape(const ShellHost *host, Window win, int w, int h, const cui_rect *boxes, int n, int radius)
+shape(const ShellHost *host, ShellSurface *surface, Window win, int w, int h,
+      const cui_rect *boxes, int n, int radius, int outset)
 {
-	if (!host->shape)
+	if (!host->shape || (surface->shape_count == n && surface->shape_radius == radius
+	    && surface->shape_outset == outset && !memcmp(surface->shapes, boxes, n * sizeof *boxes)))
 		return;
+	memcpy(surface->shapes, boxes, n * sizeof *boxes);
+	surface->shape_count = n;
+	surface->shape_radius = radius;
+	surface->shape_outset = outset;
 	Display *dpy = host->dpy;
 	Pixmap mask = XCreatePixmap(dpy, win, w, h, 1);
 	GC gc = XCreateGC(dpy, mask, 0, NULL);
@@ -263,9 +313,22 @@ shape(const ShellHost *host, Window win, int w, int h, const cui_rect *boxes, in
 	for (int i = 0; i < n; ++i)
 		rounded(dpy, mask, gc, boxes[i], radius);
 	XShapeCombineMask(dpy, win, ShapeInput, 0, 0, mask, ShapeSet);
-	XShapeCombineMask(dpy, win, ShapeBounding, 0, 0, host->composited ? None : mask, ShapeSet);
+	if (outset) {
+		for (int i = 0; i < n; ++i) {
+			cui_rect bounds = {boxes[i].x - outset, boxes[i].y - outset,
+			                   boxes[i].w + 2*outset, boxes[i].h + 2*outset};
+			rounded(dpy, mask, gc, bounds, radius + outset);
+		}
+	}
+	XShapeCombineMask(dpy, win, ShapeBounding, 0, 0, mask, ShapeSet);
 	XFreeGC(dpy, gc);
 	XFreePixmap(dpy, mask);
+}
+
+int
+shell_bar_inset(const Config *config)
+{
+	return config->shadows && config->shadow_opacity ? 3 * config->bar_shadow_blur + 1 : 0;
 }
 
 static cui_color
@@ -291,13 +354,17 @@ box(Frame *f, int id, cui_rect r, float radius, cui_color bg, cui_color border,
 		.width = r.w, .height = r.h, .radius = radius, .background = bg,
 		.border = border, .border_width = stroke,
 	}, r);
-	if (f->composite && f->config->shadows && depth && bg.a) {
-		cui_box_shadow shadow = {
-			.layer = {.offset_y = depth == 2 ? 5 : 2, .sigma = depth == 2 ? 4 : 1.4,
-			          .color = {0, 0, 0, depth == 2 ? 140 : 100}},
+	if (f->composite && f->config->shadows && f->config->shadow_opacity && depth && bg.a) {
+		float blur = depth == 2 ? f->config->panel_shadow_blur : f->config->bar_shadow_blur;
+		int opacity = f->config->shadow_opacity;
+		cui_box_shadow shadows[] = {
+			{.layer = {.offset_y = blur * 0.7f, .sigma = blur,
+			           .color = {0, 0, 0, opacity * 3 / 4}}},
+			{.layer = {.offset_y = 1, .sigma = blur * 0.4f,
+			           .color = {0, 0, 0, opacity / 2}}},
 		};
 		cui_corner_radii corners = {radius, radius, radius, radius};
-		cui_set_box_shadows(f->ui, &shadow, 1, corners);
+		cui_set_box_shadows(f->ui, shadows, COUNT(shadows), corners);
 	}
 	cui_end_box(f->ui);
 }
@@ -430,7 +497,8 @@ button(Frame *f, int id, cui_rect r, const char *text, enum ShellAction action,
 		return;
 	if (inside(r, f->hover_x, f->hover_y))
 		bg = blend(bg, alpha(fg, MAX(bg.a, 90)), 0.14f * f->hover);
-	box(f, id, r, MIN(f->config->segradius, 9), bg, transparent, 0, 0);
+	int radius = action == ActLayout ? f->config->segradius : f->config->panelradius;
+	box(f, id, r, MIN(radius, 8), bg, transparent, 0, 0);
 	if (icon_size) {
 		enum ShellAction glyph_kind = action == ActZonePrevious ? ActPast
 		                              : action == ActZoneNext ? ActFuture : action;
@@ -516,10 +584,10 @@ bar_clock(Frame *f, cui_rect r, const char *text, enum ShellAction action, int i
 	if (r.w < 12)
 		return;
 	if (inside(r, f->hover_x, f->hover_y))
-		box(f, id, r, 7, blend(bg, fg, 0.12f * f->hover), transparent, 0, 0);
+		box(f, id, r, MIN(f->config->segradius, 7), blend(bg, fg, 0.12f * f->hover), transparent, 0, 0);
 	if (with_icon)
-		glyph(f, id + 1, r.x + 6, r.y + (r.h - 15) / 2, 15, action, accent);
-	int pad = with_icon ? 26 : 2;
+		glyph(f, id + 1, r.x + 7, r.y + (r.h - 18) / 2, 18, action, accent);
+	int pad = with_icon ? 31 : 3;
 	label(f, id + 2, (cui_rect){r.x + pad, r.y, r.w - pad - 3, r.h}, text,
 	      fg, f->font->size, mono, CUI_ALIGN_CENTER);
 	hit(f, r, action, 0);
@@ -560,9 +628,13 @@ shell_bar_draw(const ShellHost *host, const ShellFont *font, unsigned revision,
 
 	int margin = MIN(c->barmargin, w / 8);
 	int right = MAX(margin, w - margin - (m->tray_width ? m->tray_width + gap : 0));
-	if (bar_bg.a) {
-		shapes[n++] = (cui_rect){0, y, w, height};
-		box(&f, 1, shapes[n-1], 0, bar_bg, transparent, 0, 0);
+	cui_rect strip = {0, y, w, height};
+	if (bar_bg.a)
+		box(&f, 1, strip, 0, bar_bg, transparent, 0, 0);
+	if (m->tray_width) {
+		cui_rect tray = {w - margin - m->tray_width, y, m->tray_width, height};
+		shapes[n++] = tray;
+		box(&f, 2, tray, radius, alpha(status_bg, 255), outline, 1, 1);
 	}
 	struct tm local;
 	char date[80] = "", clock[40] = "";
@@ -572,14 +644,14 @@ shell_bar_draw(const ShellHost *host, const ShellFont *font, unsigned revision,
 	}
 	if (timer->active)
 		strncat(clock, " •", sizeof clock - strlen(clock) - 1);
-	int cw = textwidth(&f, clock, size, mono) + 32;
-	int dw = textwidth(&f, date, size, mono) + 32;
+	int cw = textwidth(&f, clock, size, mono) + 39;
+	int dw = textwidth(&f, date, size, mono) + 39;
 	int clockw = cw + dw + 8;
 	int available = right - margin;
 	int show_icons = available >= clockw + 40;
 	if (!show_icons) {
-		cw -= 20;
-		dw -= 20;
+		cw -= 26;
+		dw -= 26;
 		clockw = cw + dw + 8;
 	}
 	int clockx = MAX(margin, right - clockw);
@@ -589,9 +661,9 @@ shell_bar_draw(const ShellHost *host, const ShellFont *font, unsigned revision,
 		cui_rect clockbox = {clockx, y, right - clockx, height};
 		shapes[n++] = clockbox;
 		box(&f, 10, clockbox, radius, status_bg, outline, status_bg.a != 0, 1);
-		bar_clock(&f, (cui_rect){clockx+4, y+3, dw, height-6}, date, ActCalendar,
+		bar_clock(&f, (cui_rect){clockx+4, y+2, dw, height-4}, date, ActCalendar,
 		          11, status_bg, fg, accent, show_icons);
-		bar_clock(&f, (cui_rect){right-cw-4, y+3, cw, height-6}, clock, ActClock,
+		bar_clock(&f, (cui_rect){right-cw-4, y+2, cw, height-4}, clock, ActClock,
 		          15, status_bg, timer->active ? accent : fg, accent, show_icons);
 		if (dw > 20)
 			box(&f, 19, (cui_rect){clockx+dw+4, y+8, 1, height-16},
@@ -600,7 +672,9 @@ shell_bar_draw(const ShellHost *host, const ShellFont *font, unsigned revision,
 
 	/* Fit the active tag first, then lay visible occupied tags out in tag order. */
 	int max_left = MAX(0, clockx - gap - margin);
-	int layoutw = m->layout >= 0 && max_left >= 57 ? 29 : 0;
+	int layoutw = (int)textwidth(&f, "|||", size, mono) + 12;
+	if (m->layout < 0 || max_left < layoutw + 36)
+		layoutw = 0;
 	int leftw = layoutw ? layoutw + 8 : 0;
 	int tagw[MAX_TAGS] = {0};
 	for (int pass = 0; pass < 2; ++pass)
@@ -608,7 +682,7 @@ shell_bar_draw(const ShellHost *host, const ShellFont *font, unsigned revision,
 			const ShellTag *tag = &m->tags[i];
 			if ((tag->id == m->tag) != (pass == 0))
 				continue;
-			int width = MIN(112, MAX(28, textwidth(&f, tag->label, size, mono) + 2*c->barpadx));
+			int width = MIN(140, MAX(32, textwidth(&f, tag->label, size, mono) + 2*c->barpadx));
 			width = MIN(width, max_left - leftw - 8);
 			if (width >= 21) {
 				tagw[i] = width;
@@ -663,10 +737,10 @@ shell_bar_draw(const ShellHost *host, const ShellFont *font, unsigned revision,
 			int current = tag->id == m->tag, id = 200 + tag->id * 3;
 			cui_color color = current ? c->palette[SchemeSel][ColFg] : norm;
 			if (!current && tag->urgent) {
-				box(&f, id, r, 7, surface_color(&f, SchemeUrg), transparent, 0, 0);
+				box(&f, id, r, MIN(radius, 7), surface_color(&f, SchemeUrg), transparent, 0, 0);
 				color = c->palette[SchemeUrg][ColFg];
 			} else if (!current && inside(r, f.hover_x, f.hover_y)) {
-				box(&f, id, r, 7, blend(norm_bg, norm, 0.12f * f.hover), transparent, 0, 0);
+				box(&f, id, r, MIN(radius, 7), blend(norm_bg, norm, 0.12f * f.hover), transparent, 0, 0);
 			}
 			label(&f, id+1, (cui_rect){r.x+3, r.y, r.w-6, r.h}, tag->label, color,
 			      size, mono, CUI_ALIGN_CENTER);
@@ -708,22 +782,23 @@ shell_bar_draw(const ShellHost *host, const ShellFont *font, unsigned revision,
 		int x = c->titlealign == 2 ? end - tw : c->titlealign == 1
 		        ? MAX(start, MIN((w - tw)/2, end-tw)) : start;
 		cui_rect r = {x, y, tw, height};
-		/* With a full-width bar shape there is no need to add each pill. */
-		if (!bar_bg.a)
-			shapes[n++] = r;
+		shapes[n++] = r;
 		cui_color title = c->palette[SchemeTitle][ColFg], bg = surface_color(&f, SchemeTitle);
 		if (inside(r, f.hover_x, f.hover_y))
 			bg = blend(bg, title, 0.1f * f.hover);
 		box(&f, 40, r, radius, bg, outline, bg.a != 0, 1);
-		glyph(&f, 41, x + 9, y + (height-14)/2, 14, ActPalette, accent);
-		label(&f, 42, (cui_rect){x+29, y, tw-29-c->barpadx, height}, m->title,
+		glyph(&f, 41, x + 9, y + (height-17)/2, 17, ActPalette, accent);
+		label(&f, 42, (cui_rect){x+31, y, tw-31-c->barpadx, height}, m->title,
 		      title, size, medium, CUI_ALIGN_START);
 		hit(&f, r, ActPalette, 0);
 	}
 	bar->animating |= hovered && fade < 1;
 	if (present(host, &bar->surface, window)) {
 		bar->nhits = f.nhits;
-		shape(host, window, w, h, shapes, bar_bg.a ? 1 : n, radius);
+		if (bar_bg.a)
+			shape(host, &bar->surface, window, w, h, &strip, 1, 0, 0);
+		else
+			shape(host, &bar->surface, window, w, h, shapes, n, radius, host->composited ? y : 0);
 	}
 }
 
@@ -745,17 +820,19 @@ shell_panel_open(const ShellHost *host, const Config *config, ShellPanel *panel,
 	if (w < 210 || h < 160)
 		return 0;
 	shell_panel_close(host, panel);
-	int pad = host->composited && config->shadows ? 16 : 0;
-	int width = MIN(kind == ActPalette ? 490 : kind == ActClock ? 370 : 336, w - 12 - 2*pad);
+	int pad = host->composited && config->shadows && config->shadow_opacity
+	          ? 4 * config->panel_shadow_blur : 0;
+	int width = MIN(kind == ActPalette ? config->palette_width
+	                : kind == ActClock ? config->clock_width : config->calendar_width, w - 12 - 2*pad);
 	const int separation = 7;
 	int py = kind == ActPalette ? y + (h - MIN(420, h-16))/4
 	         : config->topbar ? by + bh + separation - pad : by - separation + pad;
 	int available = kind == ActPalette ? y + h - py - 8
 	                : config->topbar ? y + h - py - 6 : py - y - 6;
-	int zone_rows = MAX(1, MIN(config->nzones + 1, (available - 225 - 2*pad)/33));
-	int height = kind == ActCalendar ? 318 : kind == ActPalette ? 369 : 217 + zone_rows*33;
+	int zone_rows = MAX(1, MIN(config->nzones + 1, (available - 246 - 2*pad)/40));
+	int height = kind == ActCalendar ? 364 : kind == ActPalette ? 420 : 246 + zone_rows*40;
 	height = MIN(height, available - 2*pad);
-	if (height < (kind == ActClock ? 246 : kind == ActCalendar ? 221 : 150))
+	if (height < (kind == ActClock ? 280 : kind == ActCalendar ? 240 : 160))
 		return 0;
 	int px = kind == ActPalette ? x + (w - width)/2 - pad : anchor - width/2 - pad;
 	int margin = MIN(config->barmargin, (w - width)/2);
@@ -813,19 +890,19 @@ calendar(Frame *f, const ShellPanel *p, const struct tm *local, cui_color fg,
 	char heading[96];
 	strftime(heading, sizeof heading, "%B %Y", &first);
 	float x = p->pad, y = p->pad, w = p->width, h = p->height;
-	label(f, 110, (cui_rect){x+18, y+10, w-112, 30}, heading, fg,
+	label(f, 110, (cui_rect){x+18, y+12, w-120, 36}, heading, fg,
 	      f->font->size + 5, medium, CUI_ALIGN_START);
-	button(f, 120, (cui_rect){x+w-85, y+13, 29, 27}, "", ActPast, card, fg, 14);
-	button(f, 130, (cui_rect){x+w-51, y+13, 29, 27}, "", ActFuture, card, fg, 14);
-	box(f, 140, (cui_rect){x+17, y+53, w-34, 1}, 0, card, transparent, 0, 0);
+	button(f, 120, (cui_rect){x+w-100, y+12, 38, 36}, "", ActPast, card, fg, 18);
+	button(f, 130, (cui_rect){x+w-55, y+12, 38, 36}, "", ActFuture, card, fg, 18);
+	box(f, 140, (cui_rect){x+17, y+56, w-34, 1}, 0, card, transparent, 0, 0);
 	int cell = (w - 34)/7;
-	int row = MAX(13, MIN(30, ((int)h - 118)/6));
+	int row = MAX(15, MIN(37, ((int)h - 138)/6));
 	float gridx = x + (w - 7*cell)/2;
 	for (int i = 0; i < 7; ++i) {
 		struct tm day = {.tm_wday = (i + 1) % 7};
 		char caption[32];
 		strftime(caption, sizeof caption, "%a", &day);
-		label(f, 150+i, (cui_rect){gridx+i*cell, y+60, cell, 20},
+		label(f, 150+i, (cui_rect){gridx+i*cell, y+62, cell, 24},
 		      caption, muted, MAX(9, f->font->size-2), medium, CUI_ALIGN_CENTER);
 	}
 	struct tm last = {.tm_year = p->year-1900, .tm_mon = p->month+1, .tm_mday = 0,
@@ -837,18 +914,18 @@ calendar(Frame *f, const ShellPanel *p, const struct tm *local, cui_color fg,
 		if (day < 1 || day > last.tm_mday)
 			continue;
 		int today = day == local->tm_mday && p->month == local->tm_mon && p->year == local->tm_year + 1900;
-		cui_rect r = {gridx+(i%7)*cell+2, y+82+(i/7)*row, cell-4, row-2};
+		cui_rect r = {gridx+(i%7)*cell+2, y+89+(i/7)*row, cell-4, row-2};
 		if (today)
-			box(f, 200+i, r, 8, accent, transparent, 0, 0);
+			box(f, 200+i, r, f->config->panelradius, accent, transparent, 0, 0);
 		char text[8];
 		snprintf(text, sizeof text, "%d", day);
 		label(f, 250+i, r, text, today ? ink : i%7 > 4 ? muted : fg,
 		      f->font->size, mono, CUI_ALIGN_CENTER);
 	}
-	button(f, 310, (cui_rect){x+17, y+h-37, 65, 25}, "Today", ActToday, card, fg, 0);
+	button(f, 310, (cui_rect){x+17, y+h-44, 80, 32}, "Today", ActToday, card, fg, 0);
 	char today[80];
 	strftime(today, sizeof today, "%A, %d %B", local);
-	label(f, 320, (cui_rect){x+92, y+h-37, w-110, 25}, today, muted,
+	label(f, 320, (cui_rect){x+108, y+h-44, w-125, 32}, today, muted,
 	      MAX(9, f->font->size-1), regular, CUI_ALIGN_END);
 }
 
@@ -859,17 +936,19 @@ world_clock(Frame *f, const ShellPanel *p, const ShellTimer *timer, const struct
 {
 	float x = p->pad, y = p->pad, w = p->width, h = p->height;
 	float small = MAX(9, f->font->size - 1);
-	glyph(f, 110, x+18, y+19, 16, ActClock, accent);
-	label(f, 111, (cui_rect){x+43, y+9, w-121, 35}, "World clock", fg,
+	float radius = f->config->panelradius;
+	float time_width = textwidth(f, "00:00", f->font->size, mono) + 2;
+	glyph(f, 110, x+18, y+20, 20, ActClock, accent);
+	label(f, 111, (cui_rect){x+47, y+10, w-156, 39}, "World clock", fg,
 	      f->font->size+5, medium, CUI_ALIGN_START);
 	if (f->config->nzones+1 > p->zone_rows) {
-		button(f, 120, (cui_rect){x+w-75, y+14, 25, 24}, "", ActZonePrevious, card, fg, 13);
-		button(f, 130, (cui_rect){x+w-46, y+14, 25, 24}, "", ActZoneNext, card, fg, 13);
+		button(f, 120, (cui_rect){x+w-96, y+12, 36, 36}, "", ActZonePrevious, card, fg, 18);
+		button(f, 130, (cui_rect){x+w-53, y+12, 36, 36}, "", ActZoneNext, card, fg, 18);
 	}
 	int first = MIN(p->zone_start, MAX(0, f->config->nzones+1-p->zone_rows));
 	for (int row = 0; row < p->zone_rows && first+row <= f->config->nzones; ++row) {
 		int i = first+row;
-		float yy = y+52+row*33;
+		float yy = y+55+row*40;
 		struct tm zoned = *local;
 		const char *name = "Local time";
 		if (i) {
@@ -881,48 +960,47 @@ world_clock(Frame *f, const ShellPanel *p, const ShellTimer *timer, const struct
 		char time[32], weekday[24];
 		strftime(time, sizeof time, "%H:%M", &zoned);
 		strftime(weekday, sizeof weekday, "%a", &zoned);
-		box(f, 150+row*4, (cui_rect){x+17, yy, w-34, 29}, 7, card, transparent, 0, 0);
-		label(f, 151+row*4, (cui_rect){x+27, yy, w-145, 29}, name, fg,
+		box(f, 150+row*4, (cui_rect){x+17, yy, w-34, 36}, radius, card, transparent, 0, 0);
+		label(f, 151+row*4, (cui_rect){x+27, yy, w-116-time_width, 36}, name, fg,
 		      f->font->size, i ? regular : medium, CUI_ALIGN_START);
-		label(f, 152+row*4, (cui_rect){x+w-125, yy, 38, 29}, weekday, muted,
+		label(f, 152+row*4, (cui_rect){x+w-83-time_width, yy, 46, 36}, weekday, muted,
 		      small, regular, CUI_ALIGN_END);
-		label(f, 153+row*4, (cui_rect){x+w-81, yy, 53, 29}, time, i ? fg : accent,
+		label(f, 153+row*4, (cui_rect){x+w-27-time_width, yy, time_width, 36}, time, i ? fg : accent,
 		      f->font->size, mono, CUI_ALIGN_END);
 	}
-	float title = h-147;
+	float title = h-177;
 	box(f, 300, (cui_rect){x+17, y+title-8, w-34, 1}, 0, outline, transparent, 0, 0);
-	label(f, 301, (cui_rect){x+17, y+title, w-34, 23}, "Timer", fg, f->font->size+3, medium, CUI_ALIGN_START);
+	label(f, 301, (cui_rect){x+17, y+title, w-34, 28}, "Timer", fg, f->font->size+3, medium, CUI_ALIGN_START);
 	if (timer->active) {
 		int seconds = MAX(0, ceil(shell_timer_remaining(timer, now, tick)));
 		char remaining[48];
 		snprintf(remaining, sizeof remaining, "%02d:%02d:%02d remaining",
 		         seconds/3600, seconds/60%60, seconds%60);
-		box(f, 310, (cui_rect){x+17, y+title+38, w-34, 44}, 9, card, outline, 1, 0);
-		label(f, 311, (cui_rect){x+27, y+title+38, w-54, 44}, remaining, accent,
+		box(f, 310, (cui_rect){x+17, y+title+41, w-34, 51}, radius, card, outline, 1, 0);
+		label(f, 311, (cui_rect){x+27, y+title+41, w-54, 51}, remaining, accent,
 		      f->font->size+3, mono, CUI_ALIGN_CENTER);
-		button(f, 320, (cui_rect){x+w-92, y+h-45, 75, 28}, "Cancel", ActTimerCancel, card, fg, 0);
+		button(f, 320, (cui_rect){x+w-109, y+h-52, 92, 35}, "Cancel", ActTimerCancel, card, fg, 0);
 		return;
 	}
 	float bw = (w-40)/2;
-	button(f, 330, (cui_rect){x+17, y+title+28, bw, 29}, "Alert me in", ActIn,
+	button(f, 330, (cui_rect){x+17, y+title+32, bw, 36}, "Alert me in", ActIn,
 	       p->at ? card : accent, p->at ? fg : ink, 0);
-	button(f, 340, (cui_rect){x+23+bw, y+title+28, bw, 29}, "Alert me at", ActAt,
+	button(f, 340, (cui_rect){x+23+bw, y+title+32, bw, 36}, "Alert me at", ActAt,
 	       p->at ? accent : card, p->at ? ink : fg, 0);
-	cui_rect input = {x+17, y+title+66, w-113, 34};
-	box(f, 350, input, 8, card, alpha(accent, 160), 1, 0);
-
-	label(f, 351, (cui_rect){input.x+10, input.y, input.w-19, input.h},
-	      p->input[0] ? p->input : p->at ? "HH:MM" : "Minutes or HH:MM:SS",
+	cui_rect input = {x+17, y+title+79, w-132, 42};
+	box(f, 350, input, radius, card, accent, 1, 0);
+	label(f, 351, (cui_rect){input.x+14, input.y, input.w-25, input.h},
+	      p->input[0] ? p->input : p->at ? "HH:MM" : "Minutes / HH:MM:SS",
 	      p->input[0] ? fg : muted, small, mono, CUI_ALIGN_START);
-	if (p->input[0]) {
-		float caret = textwidth(f, p->input, small, mono);
-		if (caret < input.w-20)
-			box(f, 352, (cui_rect){input.x+11+caret, input.y+9, 1, 16},
-			    0, accent, transparent, 0, 0);
-	}
+	char prefix[sizeof p->input];
+	snprintf(prefix, sizeof prefix, "%.*s", p->cursor, p->input);
+	float caret = prefix[0] ? textwidth(f, prefix, small, mono) : 0;
+	if (caret < input.w-24)
+		box(f, 352, (cui_rect){input.x+12+caret, input.y+11, 1, 20},
+		    0, accent, transparent, 0, 0);
 	hit(f, input, ActTimerInput, 0);
-	button(f, 360, (cui_rect){x+w-88, input.y, 71, input.h}, "Set", ActTimerSet, accent, ink, 0);
-	label(f, 370, (cui_rect){x+17, y+h-39, w-34, 23},
+	button(f, 360, (cui_rect){x+w-105, input.y, 88, input.h}, "Set", ActTimerSet, accent, ink, 0);
+	label(f, 370, (cui_rect){x+17, y+h-47, w-34, 30},
 	      p->message[0] ? p->message : p->at ? "24-hour local time" : "Press Enter to start",
 	      p->message[0] ? f->config->palette[SchemeUrg][ColBg] : muted, small,
 	      regular, CUI_ALIGN_START);
@@ -933,9 +1011,9 @@ palette(Frame *f, const ShellPanel *p, const ShellEntry *entries, int count,
         cui_color fg, cui_color muted, cui_color accent, cui_color ink, cui_color card, cui_color outline)
 {
 	float x = p->pad, y = p->pad, w = p->width, h = p->height;
-	box(f, 110, (cui_rect){x+15, y+15, w-30, 44}, 9, card, alpha(accent, 170), 1, 0);
+	box(f, 110, (cui_rect){x+15, y+15, w-30, 44}, f->config->panelradius, card, alpha(accent, 170), 1, 0);
 	glyph(f, 111, x+28, y+29, 16, ActPalette, accent);
-		label(f, 112, (cui_rect){x+53, y+15, w-82, 44},
+	label(f, 112, (cui_rect){x+53, y+15, w-82, 44},
 	      p->input[0] ? p->input : "Find a window, tag, or layout…",
 	      p->input[0] ? fg : muted, f->font->size+1, medium, CUI_ALIGN_START);
 	if (p->input[0]) {
@@ -943,22 +1021,22 @@ palette(Frame *f, const ShellPanel *p, const ShellEntry *entries, int count,
 		if (caret < w-84)
 			box(f, 114, (cui_rect){x+54+caret, y+27, 1, 20}, 0, accent, transparent, 0, 0);
 	}
-	int rows = MAX(1, MIN(8, ((int)h-107)/33));
+	int rows = MAX(1, MIN(8, ((int)h-107)/38));
 	int first = MIN(MAX(0, p->selected-rows+1), MAX(0, count-rows));
 	if (!count)
 		label(f, 113, (cui_rect){x+18, y+74, w-36, 60}, "No matching commands",
 		      muted, f->font->size, regular, CUI_ALIGN_CENTER);
 	for (int row = 0; row < rows && first+row < count; ++row) {
 		int i = first+row;
-		float yy = y+69+row*33;
-		cui_rect r = {x+15, yy, w-30, 31};
+		float yy = y+69+row*38;
+		cui_rect r = {x+15, yy, w-30, 36};
 		int active = i == p->selected;
 		if (active || inside(r, f->hover_x, f->hover_y))
-			box(f, 150+row*4, r, 7, active ? accent : card, transparent, 0, 0);
+			box(f, 150+row*4, r, f->config->panelradius, active ? accent : card, transparent, 0, 0);
 		float detail = MIN(w/3, textwidth(f, entries[i].detail, f->font->size-1, regular) + 12);
-		label(f, 151+row*4, (cui_rect){x+26, yy, w-53-detail, 31}, entries[i].label,
+		label(f, 151+row*4, (cui_rect){x+26, yy, w-53-detail, 36}, entries[i].label,
 		      active ? ink : fg, f->font->size, medium, CUI_ALIGN_START);
-		label(f, 152+row*4, (cui_rect){x+w-26-detail, yy, detail, 31}, entries[i].detail,
+		label(f, 152+row*4, (cui_rect){x+w-26-detail, yy, detail, 36}, entries[i].detail,
 		      active ? ink : muted, f->font->size-1, regular, CUI_ALIGN_END);
 		hit(f, r, ActChoose, i);
 	}
@@ -982,7 +1060,7 @@ shell_panel_draw(const ShellHost *host, const ShellFont *font, unsigned revision
 	cui_color accent = alpha(c->palette[SchemeSel][ColBg], 255), ink = c->palette[SchemeSel][ColFg];
 	cui_color card = blend(bg, fg, 0.10f), muted = blend(bg, fg, 0.64f);
 	cui_color outline = blend(bg, fg, 0.19f);
-	float radius = fmax(10, c->segradius+3);
+	float radius = c->panelradius;
 	cui_rect body = {p->pad, p->pad, p->width, p->height};
 	/* The primary surface settles in place while its input region stays stable. */
 	float t = !c->reduced_motion && c->duration && host->composited
@@ -990,7 +1068,8 @@ shell_panel_draw(const ShellHost *host, const ShellFont *font, unsigned revision
 	cui_rect animated = body;
 	if (p->pad)
 		animated.y += (1-t) * 4 * (c->topbar ? -1 : 1);
-	box(&f, 100, animated, radius, alpha(bg, 234+21*t), outline, 1, 2);
+	int opacity = host->composited ? c->panel_opacity : 255;
+	box(&f, 100, animated, radius, alpha(bg, opacity * (0.92f+0.08f*t)), outline, 1, 2);
 	struct tm local = {0};
 	localtime_r(&now, &local);
 	if (p->kind == ActCalendar)
@@ -1001,7 +1080,7 @@ shell_panel_draw(const ShellHost *host, const ShellFont *font, unsigned revision
 		palette(&f, p, entries, count, fg, muted, accent, ink, card, outline);
 	if (present(host, &p->surface, p->win)) {
 		p->nhits = f.nhits;
-		shape(host, p->win, w, h, &body, 1, radius);
+		shape(host, &p->surface, p->win, w, h, &body, 1, radius, p->pad);
 	}
 	return t < 1;
 }
@@ -1090,18 +1169,4 @@ shell_timer_notify(const Config *config, int xfd)
 	       "Timer complete", "Your mwm timer has finished.", (char *)NULL);
 	perror("mwm: notify-send");
 	_exit(127);
-}
-
-void
-shell_tray_draw(const ShellHost *host, const ShellFont *font, unsigned revision, const Config *c,
-                ShellSurface *surface, Window win, int w, int h, int pad)
-{
-	if (!begin(host, font, revision, surface, win, w, h, 0))
-		return;
-	Frame f = {.ui = surface->ui, .font = font, .config = c};
-	cui_rect body = {0, pad, w, h - 2*pad};
-	box(&f, 1, body, c->segradius, alpha(c->palette[SchemeStatus][ColBg], 255),
-	    alpha(c->palette[SchemeNorm][ColBorder], 170), 1, 0);
-	if (present(host, surface, win))
-		shape(host, win, w, h, &body, 1, c->segradius);
 }

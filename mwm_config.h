@@ -25,7 +25,8 @@ typedef struct {
 	int topbar, showbar, barheight, barvertpad, barpadx, barmargin, barvmargin;
 	int barseggap, segradius, titlealign;
 	int showsystray, showtraybar, systraymon, systrayspacing, systrayvertpad;
-	int duration, reduced_motion, shadows;
+	int panelradius, panel_opacity, calendar_width, clock_width, palette_width;
+	int duration, reduced_motion, shadows, shadow_opacity, bar_shadow_blur, panel_shadow_blur;
 	char font[128], monofont[128];
 	char colors[SchemeLast][3][64];
 	int alpha[SchemeLast];
