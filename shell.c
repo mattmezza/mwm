@@ -433,21 +433,28 @@ static const char *icons[ActChoose + 1] = {
 	/* Outline glyphs drawn on the same 24px grid as Heroicons. */
 	[ActCalendar] = "<rect x='3' y='5' width='18' height='16' rx='3'/><path d='M7 3v4m10-4v4M3 10h18m-14 5h2m3 0h2m3 0h1m-11 3h2m3 0h2'/>",
 	[ActClock] = "<circle cx='12' cy='12' r='9'/><path d='M12 7v5l3 2'/>",
-	[ActLayout] = "<rect x='3' y='4' width='18' height='16' rx='2'/><path d='M10 4v16m0-8h11'/>",
 	[ActPalette] = "<circle cx='10.5' cy='10.5' r='5.5'/><path d='m15 15 5 5'/>",
 	[ActPast] = "<path d='m14.5 6-6 6 6 6'/>",
 	[ActFuture] = "<path d='m9.5 6 6 6-6 6'/>",
 };
 
+/* Runware layout concepts redrawn on the bar's 24px outline grid. */
+static const char *layout_icons[] = {
+	"<rect x='3' y='5.5' width='18' height='13' rx='1.5'/><path d='M9 5.5v13m6-13v13'/>",
+	"<rect x='3' y='5.5' width='18' height='13' rx='1.5'/><path d='M12 5.5v13m0-6.5h9'/>",
+	"<path d='M7 15.5H4.5A1.5 1.5 0 0 1 3 14V5.5A1.5 1.5 0 0 1 4.5 4h12A1.5 1.5 0 0 1 18 5.5V8'/>"
+	"<rect x='7' y='8' width='14' height='12' rx='1.5'/>",
+};
+
 static void
-icon(Frame *f, int id, cui_rect rect, enum ShellAction kind, cui_color fg, cui_icon_state *state)
+icon(Frame *f, int id, cui_rect rect, const char *paths, cui_color fg, cui_icon_state *state)
 {
-	char svg[512];
-	snprintf(svg, sizeof svg,
-	         "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'>"
-	         "<g fill='none' stroke='#ffffff' stroke-width='1.7' stroke-linecap='round' "
-	         "stroke-linejoin='round'>%s</g></svg>", icons[kind]);
 	if (!state->internal) {
+		char svg[512];
+		snprintf(svg, sizeof svg,
+		         "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'>"
+		         "<g fill='none' stroke='#ffffff' stroke-width='1.7' stroke-linecap='round' "
+		         "stroke-linejoin='round'>%s</g></svg>", paths);
 		cui_icon_state_init(state);
 		cui_icon_set_data(state, cui_string(svg));
 	}
@@ -460,18 +467,21 @@ icon(Frame *f, int id, cui_rect rect, enum ShellAction kind, cui_color fg, cui_i
 }
 
 static cui_icon_state icon_states[COUNT(icons)];
+static cui_icon_state layout_states[COUNT(layout_icons)];
 
 void
 shell_icons_free(void)
 {
 	for (int i = 0; i < COUNT(icon_states); ++i)
 		cui_icon_state_destroy(&icon_states[i]);
+	for (int i = 0; i < COUNT(layout_states); ++i)
+		cui_icon_state_destroy(&layout_states[i]);
 }
 
 static void
 glyph(Frame *f, int id, float x, float y, int size, enum ShellAction kind, cui_color color)
 {
-	icon(f, id, (cui_rect){x, y, size, size}, kind, color, &icon_states[kind]);
+	icon(f, id, (cui_rect){x, y, size, size}, icons[kind], color, &icon_states[kind]);
 }
 
 static int
@@ -504,8 +514,7 @@ button(Frame *f, int id, cui_rect r, const char *text, enum ShellAction action,
 		return;
 	if (inside(r, f->hover_x, f->hover_y))
 		bg = blend(bg, alpha(fg, MAX(bg.a, 90)), 0.14f * f->hover);
-	int radius = action == ActLayout ? f->config->segradius : f->config->panelradius;
-	box(f, id, r, MIN(radius, 8), bg, transparent, 0, 0);
+	box(f, id, r, MIN(f->config->panelradius, 8), bg, transparent, 0, 0);
 	if (icon_size) {
 		enum ShellAction glyph_kind = action == ActZonePrevious ? ActPast
 		                              : action == ActZoneNext ? ActFuture : action;
@@ -513,7 +522,7 @@ button(Frame *f, int id, cui_rect r, const char *text, enum ShellAction action,
 		      icon_size, glyph_kind, fg);
 	}
 	label(f, id + 2, (cui_rect){r.x + 2, r.y, r.w - 4, r.h}, text, fg,
-	      f->size, action == ActLayout ? mono : regular, CUI_ALIGN_CENTER);
+	      f->size, regular, CUI_ALIGN_CENTER);
 	hit(f, r, action, 0);
 }
 
@@ -656,7 +665,8 @@ bar_tags(Frame *f, ShellBar *bar, cui_rect area, const ShellBarModel *m,
 	cui_color norm = c->palette[SchemeNorm][ColFg];
 	cui_color norm_bg = surface_color(f, SchemeNorm);
 	/* Fit the active tag first, then lay the visible tags out in tag order. */
-	int layoutw = m->layout >= 0 && width >= LayoutButtonWidth + 8 + (m->ntags ? 32 : 0)
+	int layoutw = m->layout >= 0 && m->layout < COUNT(layout_icons)
+	              && width >= LayoutButtonWidth + 8 + (m->ntags ? 32 : 0)
 	              ? LayoutButtonWidth : 0;
 	int leftw = layoutw + 8;
 	int tagw[MAX_TAGS] = {0};
@@ -729,8 +739,13 @@ bar_tags(Frame *f, ShellBar *bar, cui_rect area, const ShellBarModel *m,
 			cui_rect r = {x, y+4, layoutw, height-8};
 			if (x > area.x + 4)
 				box(f, 24, (cui_rect){x, y+9, 1, height-18}, 0, outline, transparent, 0, 0);
-			const char *symbols[] = {"|||", "||=", "><>"};
-			button(f, 25, r, symbols[m->layout], ActLayout, transparent, accent, 0);
+			if (inside(r, f->hover_x, f->hover_y))
+				box(f, 25, r, c->tagradius, blend(norm_bg, norm, 0.12f * f->hover),
+				    transparent, 0, 0);
+			int size = MIN(22, (int)r.h);
+			cui_rect image = {r.x + ((int)r.w - size)/2, r.y + ((int)r.h - size)/2, size, size};
+			icon(f, 26, image, layout_icons[m->layout], accent, &layout_states[m->layout]);
+			hit(f, r, ActLayout, 0);
 		}
 	} else {
 		bar->selected_w = 0;
