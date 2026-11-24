@@ -1149,7 +1149,10 @@ toggletraybar(void)
 	if (!settings.showsystray)
 		return;
 	systrayvisible = !systrayvisible;
-	updatesystray();
+	/* Visibility is animated by paintbar. Keep the XEmbed strip in place
+	 * until that transition has clipped it away. */
+	if (!systray)
+		updatesystray();
 	drawbars();
 }
 
