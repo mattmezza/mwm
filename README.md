@@ -290,19 +290,6 @@ ipc.h          IPC atom/protocol shared by mwm and mwmc
 examples/      config.ini, Xresources, xinitrc, sxhkdrc, picom.conf
 ```
 
-## Screenshots
-
-<details open>
-<summary>Click to collapse</summary>
-
-![screenshot 0](examples/screenshots/0.png)
-*Default setup — cols layout with tags, bar, and gap.*
-
-![screenshot 1](examples/screenshots/1.png)
-*Stack layout with floating window.*
-
-</details>
-
 ## License
 
 MIT Derived in part from dwm (suckless.org).
