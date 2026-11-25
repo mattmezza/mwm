@@ -103,8 +103,10 @@ typedef struct {
 
 typedef struct {
 	ShellSurface surface;
+	ShellPopupExit exit;
 	Window win;
-	int mapped, dirty;
+	int mapped, dirty, offset;
+	double opened;
 	cui_rect geometry;
 } ShellTooltip;
 
@@ -184,8 +186,9 @@ int shell_bar_draw(const ShellHost *, const ShellFont *, unsigned revision,
                     const Config *, ShellBar *, Window, const ShellBarModel *,
                     const ShellTimer *, time_t now, double tick);
 int shell_bar_metric(const ShellBar *, int x, int y);
-void shell_tooltip_hide(const ShellHost *, ShellTooltip *);
+void shell_tooltip_hide(const ShellHost *, const Config *, ShellTooltip *);
 void shell_tooltip_close(const ShellHost *, ShellTooltip *);
+int shell_tooltip_motion(const ShellHost *, const Config *, ShellTooltip *, double now, int frame);
 void shell_tooltip_draw(const ShellHost *, const ShellFont *, unsigned revision,
                         const Config *, ShellTooltip *, const ShellSystem *,
                         const Controls *, int metric, cui_rect monitor, cui_rect anchor);

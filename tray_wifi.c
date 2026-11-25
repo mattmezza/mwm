@@ -457,13 +457,14 @@ access_points(Tray *tray, GDBusProxy *device)
 		if (length > 32)
 			continue;
 		memcpy(key, raw, length);
-		key[length] = (char)security;
+		key[length] = security == Sae ? Psk : security == Enterprise192 ? Enterprise : security;
 		g_autoptr(GBytes) identity = g_bytes_new(key, length+1);
 		TrayEntry *previous = g_hash_table_lookup(seen, identity);
 		if (!previous) {
 			TrayEntry *row = tray_entry(tray, path, name, detail, TraySignal, active, profile != NULL, strength);
 			g_hash_table_insert(seen, g_bytes_ref(identity), row);
-		} else if (!previous->active && (active || strength > previous->strength)) {
+		} else if (!previous->active && (active || (profile && !previous->saved) ||
+		           ((profile != NULL) == previous->saved && strength > previous->strength))) {
 			g_free(previous->id);
 			g_free(previous->detail);
 			previous->id = g_strdup(path);

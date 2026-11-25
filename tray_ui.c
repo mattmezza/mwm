@@ -22,6 +22,11 @@ static const char *glyphs[GlyphCount] = {
 	[GlyphLock] = "<rect x='6' y='10' width='12' height='10' rx='2'/><path d='M8.5 10V7a3.5 3.5 0 0 1 7 0v3M12 14v2'/>",
 	[GlyphRefresh] = "<path d='M20 5v5h-5M4 19v-5h5M19.7 10A8 8 0 0 0 6.5 6M4.3 14a8 8 0 0 0 13.2 4'/>",
 	[GlyphForget] = "<path d='M4 7h16m-14 0 1 13h10l1-13M9 7V4h6v3m-5 4v5m4-5v5'/>",
+	[GlyphHeadphones] = "<path d='M4 15v-3a8 8 0 0 1 16 0v3'/><rect x='4' y='13' width='4.5' height='7' rx='1.4'/><rect x='15.5' y='13' width='4.5' height='7' rx='1.4'/>",
+	[GlyphKeyboard] = "<rect x='2.5' y='6' width='19' height='12' rx='2'/><path d='M6 10h.01M10 10h.01M14 10h.01M18 10h.01M6 14h.01M10 14h4m4 0h.01'/>",
+	[GlyphMouse] = "<rect x='6' y='2.5' width='12' height='19' rx='6'/><path d='M12 6v4'/>",
+	[GlyphComputer] = "<rect x='5' y='4' width='14' height='12' rx='1.5'/><path d='m5 16-2.5 4h19L19 16m-9 1.5h4'/>",
+	[GlyphGamepad] = "<path d='M8 7h8a4 4 0 0 1 3.9 3l1.1 4.5a2.4 2.4 0 0 1-4 2.4L14.7 15H9.3L7 17a2.4 2.4 0 0 1-4-2.4l1.1-4.5A4 4 0 0 1 8 7Z'/><path d='M8 10v4m-2-2h4m5-1h.01m3 2h.01'/>",
 };
 
 static void
@@ -199,7 +204,12 @@ list_row(Drawing *d, TrayEntry *entry, int id, int index, cui_rect r, gboolean e
 	if (hover || entry->active)
 		fill = cui_color_mix_oklab(d->bg, d->accent, hover ? 0.21f : 0.12f);
 	box(d->ui, id, r, d->radius, fill, entry->active ? d->line : transparent, entry->active);
-	int which = entry->icon == TraySignal ? signal_icon(entry->strength) : entry->icon == TrayVpn ? GlyphVpn : GlyphDevice;
+	static const int entry_icons[] = {
+		[TrayDevice] = GlyphDevice, [TrayVpn] = GlyphVpn, [TrayHeadphones] = GlyphHeadphones,
+		[TrayKeyboard] = GlyphKeyboard, [TrayMouse] = GlyphMouse, [TrayComputer] = GlyphComputer,
+		[TrayGamepad] = GlyphGamepad,
+	};
+	int which = entry->icon == TraySignal ? signal_icon(entry->strength) : entry_icons[entry->icon];
 	glyph(d->win, d->ui, id+1, r.x+9, r.y+9, 20, which, entry->active || hover ? d->accent : d->muted);
 	gboolean can_forget = enabled && entry->saved && entry->icon != TrayVpn;
 	int reserve = can_forget ? 34 : 10;
@@ -248,8 +258,11 @@ list_panel(Tray *tray, Drawing *d, int x, int y, int w)
 	text_at(d, 120, (cui_rect){x, y+1, w-165, 32}, label, d->fg, d->size-3, medium, CUI_ALIGN_START);
 	if (!v->tab) {
 		if (tray->kind == TrayWifi && tray->enabled)
-			button(d, 123, (cui_rect){x+w-150, y+2, 65, 25}, "Hidden…", HitHidden, 0, FALSE, !tray->busy);
-		const char *scan = tray->scanning ? (tray->kind == TrayWifi ? "Scanning…" : "Stop") : "Scan";
+			button(d, 123, (cui_rect){x+w-160, y+2, 75, 25}, "Hidden", HitHidden, 0, FALSE, !tray->busy);
+		if (tray->kind == TrayBluetooth && tray->enabled)
+			button(d, 123, (cui_rect){x+w-184, y+2, 99, 25}, tray->discoverable ? "Visible" : "Make visible",
+			       HitVisible, 0, tray->discoverable, !tray->busy);
+		const char *scan = tray->scanning ? (tray->kind == TrayWifi ? "Scanning" : "Stop") : "Scan";
 		button(d, 126, (cui_rect){x+w-76, y+2, 76, 25}, scan, HitScan, 0, FALSE, tray->can_scan);
 	}
 	y += 34;

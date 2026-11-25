@@ -7,8 +7,8 @@
 #define PROPERTIES "org.freedesktop.DBus.Properties"
 
 enum TrayKind { TrayWifi, TrayBluetooth };
-enum TrayAction { TrayToggle, TrayScan, TrayRow, TrayForget, TrayHidden };
-enum TrayIcon { TraySignal, TrayDevice, TrayVpn, TrayIconCount };
+enum TrayAction { TrayToggle, TrayScan, TrayRow, TrayForget, TrayHidden, TrayVisible };
+enum TrayIcon { TraySignal, TrayDevice, TrayVpn, TrayHeadphones, TrayKeyboard, TrayMouse, TrayComputer, TrayGamepad, TrayIconCount };
 
 typedef struct {
 	char *id, *label, *detail;
@@ -39,7 +39,7 @@ struct Tray {
 	const char *service, *manager_path;
 	char *owner;
 	guint refresh_id;
-	gboolean connected, available, enabled, scanning, can_scan, busy;
+	gboolean connected, available, enabled, scanning, can_scan, discoverable, busy;
 	int strength;
 	char *headline, *subtitle, *message;
 	gboolean failed;

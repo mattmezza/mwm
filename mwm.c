@@ -1189,7 +1189,7 @@ togglebar(void)
 	animate_bar(tick);
 	if (!barvisible) {
 		dismisspanel();
-		shell_tooltip_hide(&shell, &tooltip);
+		shell_tooltip_hide(&shell, &settings, &tooltip);
 	}
 	updatebars();
 	arrange(NULL);
@@ -4224,6 +4224,8 @@ dismisspanel(void)
 	if (!panel.win)
 		return;
 	int direction = panel.kind == ActPalette || settings.topbar ? 1 : -1;
+	XUngrabPointer(dpy, CurrentTime);
+	XUngrabKeyboard(dpy, CurrentTime);
 	shell_popup_dismiss(&shell, &settings, &panel_exit, panel.win, &panel.surface, direction);
 	panel = (ShellPanel){0};
 }
@@ -4697,7 +4699,7 @@ system_tooltip_tick(double tick)
 		}
 	if (!m) {
 		hovered_bar = None;
-		shell_tooltip_hide(&shell, &tooltip);
+		shell_tooltip_hide(&shell, &settings, &tooltip);
 		return 0;
 	}
 	if (m->barwin != hovered_bar || metric != hovered_metric) {
@@ -4818,6 +4820,7 @@ ui_tick(void)
 	if (can_animate)
 		frame = tick + 0.016;
 	double tooltip_next = system_tooltip_tick(tick);
+	animating |= shell_tooltip_motion(&shell, &settings, &tooltip, tick, can_animate);
 	int timeout = animating || panel_animating ? MAX(1, (int)ceil((frame-tick)*1000)) : 1000;
 	timeout = MIN(timeout, controls_timeout);
 	if (timer.active)

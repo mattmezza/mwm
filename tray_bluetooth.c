@@ -24,7 +24,7 @@ static const char agent_xml[] =
 	"</interface></node>";
 
 typedef struct {
-	char *adapter, *discovery, *device, *pairing;
+	char *adapter, *discovery, *device, *pairing, *prompt_device;
 	GDBusMethodInvocation *request;
 	guint agent, scan_timeout;
 	gboolean registered, default_agent, discovery_pending;
@@ -75,6 +75,8 @@ scan_started(Tray *tray, GVariant *reply, GError *error, gpointer data)
 	bt->discovery_pending = FALSE;
 	if (error)
 		tray_error(tray, error, "Could not scan for devices");
+	else if (g_strcmp0(adapter, bt->adapter))
+		tray_call(tray, adapter, ADAPTER, "StopDiscovery", NULL, 8000, NULL, NULL);
 	else {
 		bt->discovery = g_steal_pointer(&adapter);
 		bt->scan_timeout = g_timeout_add_seconds(30, scan_timeout, tray);
@@ -107,6 +109,7 @@ answer_pairing(Tray *tray, gboolean accepted)
 		tray_call(tray, bt->pairing, DEVICE, "CancelPairing", NULL, 5000, NULL, NULL);
 	}
 	g_clear_object(&bt->request);
+	g_clear_pointer(&bt->prompt_device, g_free);
 	tray_clear_prompt(tray);
 }
 
@@ -117,6 +120,7 @@ cancel_agent(Tray *tray)
 	if (bt->request)
 		g_dbus_method_invocation_return_dbus_error(bt->request, "org.bluez.Error.Canceled", "Pairing canceled");
 	g_clear_object(&bt->request);
+	g_clear_pointer(&bt->prompt_device, g_free);
 	if (tray->answer == answer_pairing)
 		tray_clear_prompt(tray);
 }
@@ -159,7 +163,7 @@ pairing_request(GDBusConnection *connection, const char *sender, const char *pat
 	guint32 code;
 	if (!strcmp(method, "RequestConfirmation")) {
 		g_variant_get_child(parameters, 1, "u", &code);
-		snprintf(detail, sizeof detail, "%s · Does this code match?  %06u", name, code);
+		snprintf(detail, sizeof detail, "%06u · Confirm this code on %s", code, name);
 		accept = "Pair";
 	} else if (!strcmp(method, "RequestPasskey") || !strcmp(method, "RequestPinCode")) {
 		numeric = !strcmp(method, "RequestPasskey");
@@ -186,11 +190,12 @@ pairing_request(GDBusConnection *connection, const char *sender, const char *pat
 		snprintf(detail, sizeof detail, "Allow %s to pair?", name);
 		accept = "Pair";
 	}
-	if (display && tray->answer == answer_pairing && !bt->request) {
+	if (display && tray->answer == answer_pairing && !bt->request && !g_strcmp0(device, bt->prompt_device)) {
 		g_free(tray->prompt.detail);
 		tray->prompt.detail = tray_label(detail);
 	} else {
 		tray_prompt(tray, title, detail, display ? NULL : accept, answer_pairing);
+		bt->prompt_device = g_strdup(device);
 		if (field)
 			tray_field(tray, "code", field, "", FALSE, numeric, TRUE);
 	}
@@ -284,6 +289,23 @@ device_order(gconstpointer left, gconstpointer right)
 	return g_utf8_collate(a->label, b->label);
 }
 
+static enum TrayIcon
+device_icon(GDBusProxy *device)
+{
+	g_autofree char *name = tray_string(device, "Icon");
+	if (!name)
+		return TrayDevice;
+	if (g_str_has_prefix(name, "audio-"))
+		return TrayHeadphones;
+	if (!strcmp(name, "input-keyboard"))
+		return TrayKeyboard;
+	if (!strcmp(name, "input-mouse"))
+		return TrayMouse;
+	if (!strcmp(name, "input-gaming"))
+		return TrayGamepad;
+	return !strcmp(name, "computer") ? TrayComputer : TrayDevice;
+}
+
 void
 bluetooth_model(Tray *tray)
 {
@@ -316,6 +338,9 @@ bluetooth_model(Tray *tray)
 	}
 	tray->available = TRUE;
 	tray->enabled = tray_bool(adapter, "Powered");
+	tray->discoverable = tray_bool(adapter, "Discoverable");
+	if (bt->discovery && (!tray->enabled || strcmp(bt->adapter, bt->discovery)))
+		stop_scan(tray);
 	tray->scanning = bt->discovery || bt->discovery_pending;
 	tray->can_scan = tray->enabled && !bt->discovery_pending;
 	unsigned connected = 0;
@@ -342,7 +367,7 @@ bluetooth_model(Tray *tray)
 			snprintf(detail, sizeof detail, "Connected · %u%%", tray_uint(battery, "Percentage"));
 		else
 			snprintf(detail, sizeof detail, "%s", active ? "Connected" : paired ? "Paired" : "Nearby");
-		TrayEntry *row = tray_entry(tray, path, name, detail, TrayDevice, active, paired, -1);
+		TrayEntry *row = tray_entry(tray, path, name, detail, device_icon(device), active, paired, -1);
 		if (active) {
 			last = row->label;
 			++connected;
@@ -355,7 +380,8 @@ bluetooth_model(Tray *tray)
 	snprintf(count, sizeof count, "%u devices connected", connected);
 	tray_model(tray, !tray->enabled ? "Bluetooth off" : connected == 1 ? last : connected ? count : "Bluetooth on",
 	           tray->scanning ? "Looking for nearby devices…" : !tray->enabled ? "Turn on to connect devices"
-	           : connected ? "Devices" : "Ready to connect");
+	           : tray->discoverable ? "Visible to nearby devices" : connected == 1 ? "1 connected device"
+	           : connected ? "Ready to pair more devices" : "Ready to connect");
 }
 
 static void
@@ -394,6 +420,17 @@ answer_forget(Tray *tray, gboolean accepted)
 	          15000, bt_result, "Could not remove the device");
 }
 
+static void
+pairable(Tray *tray, GVariant *reply, GError *error, gpointer data)
+{
+	g_autofree char *adapter = data;
+	if (error)
+		bt_result(tray, reply, error, "Could not enable pairing");
+	else
+		tray_set(tray, adapter, ADAPTER, "Discoverable", g_variant_new_boolean(TRUE),
+		         bt_result, "Could not make the adapter visible");
+}
+
 void
 bluetooth_action(Tray *tray, enum TrayAction action, const char *id)
 {
@@ -419,6 +456,18 @@ bluetooth_action(Tray *tray, enum TrayAction action, const char *id)
 		return;
 	case TrayHidden:
 		return;
+	case TrayVisible: {
+		if (!tray->enabled)
+			return;
+		g_autoptr(GDBusProxy) adapter = tray_proxy(tray, bt->adapter, ADAPTER);
+		tray->busy = TRUE;
+		if (!tray->discoverable && !tray_bool(adapter, "Pairable"))
+			tray_set(tray, bt->adapter, ADAPTER, "Pairable", g_variant_new_boolean(TRUE), pairable, g_strdup(bt->adapter));
+		else
+			tray_set(tray, bt->adapter, ADAPTER, "Discoverable", g_variant_new_boolean(!tray->discoverable),
+			         bt_result, "Could not change Bluetooth visibility");
+		return;
+	}
 	case TrayForget:
 	case TrayRow:
 		break;

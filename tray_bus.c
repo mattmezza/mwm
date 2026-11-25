@@ -155,7 +155,7 @@ refresh(gpointer data)
 	Tray *tray = data;
 	tray->refresh_id = 0;
 	g_ptr_array_set_size(tray->rows, 0);
-	tray->available = tray->enabled = tray->scanning = tray->can_scan = FALSE;
+	tray->available = tray->enabled = tray->scanning = tray->can_scan = tray->discoverable = FALSE;
 	tray->strength = 0;
 	if (tray->kind == TrayWifi)
 		wifi_model(tray);

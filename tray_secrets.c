@@ -194,7 +194,8 @@ request_keys(Request *r)
 		}
 	} else if (r->vpn) {
 		for (int i = 0; r->hints[i]; ++i)
-			add_key(r, r->hints[i]);
+			if (!g_str_has_prefix(r->hints[i], "x-vpn-message:"))
+				add_key(r, r->hints[i]);
 		if (!r->keys->len)
 			add_key(r, "password");
 	} else if (!strcmp(r->name, "wireguard")) {

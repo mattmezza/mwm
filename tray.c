@@ -340,6 +340,8 @@ close_panel(Tray *tray, gboolean abort)
 		XDestroyIC(w->ic);
 		w->ic = NULL;
 	}
+	XUngrabPointer(w->host.dpy, CurrentTime);
+	XUngrabKeyboard(w->host.dpy, CurrentTime);
 	shell_popup_dismiss(&w->host, &tray->config, &w->exit, w->panel, &w->panel_surface, w->direction);
 	w->panel = None;
 	w->paste_pending = FALSE;
@@ -429,7 +431,7 @@ static void
 panel_key(Tray *tray, XKeyEvent *event)
 {
 	TrayWindow *w = tray->window;
-	KeySym key;
+	KeySym key = NoSymbol;
 	char bytes[64];
 	Status status = 0;
 	int length = w->ic ? Xutf8LookupString(w->ic, event, bytes, sizeof bytes, &key, &status)
@@ -479,6 +481,10 @@ panel_key(Tray *tray, XKeyEvent *event)
 	}
 	if (key == XK_r || key == XK_R) {
 		tray_action(tray, TrayScan, NULL);
+		return;
+	}
+	if (tray->kind == TrayBluetooth && (key == XK_v || key == XK_V)) {
+		tray_action(tray, TrayVisible, NULL);
 		return;
 	}
 	if (key == XK_space) {
@@ -531,6 +537,7 @@ panel_click(Tray *tray, XButtonEvent *event)
 		case HitWifi: set_tab(tray, 0); break;
 		case HitVpn: set_tab(tray, 1); break;
 		case HitHidden: tray_action(tray, TrayHidden, NULL); break;
+		case HitVisible: tray_action(tray, TrayVisible, NULL); break;
 		case HitRow: tray_action(tray, TrayRow, hit.row); break;
 		case HitForget: tray_action(tray, TrayForget, hit.row); break;
 		case HitField: focus_field(tray, hit.value); break;

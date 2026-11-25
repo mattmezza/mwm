@@ -404,8 +404,6 @@ shell_popup_dismiss(const ShellHost *host, const Config *c, ShellPopupExit *exit
 	if (!win)
 		return;
 	Display *dpy = host->dpy;
-	XUngrabPointer(dpy, CurrentTime);
-	XUngrabKeyboard(dpy, CurrentTime);
 	shell_popup_exit_reset(host, exit);
 	XWindowAttributes attrs;
 	int duration = popup_duration(c, c->popup_exit);
@@ -1494,10 +1492,11 @@ shell_bar_draw(const ShellHost *host, const ShellFont *font, unsigned revision,
 }
 
 void
-shell_tooltip_hide(const ShellHost *host, ShellTooltip *tip)
+shell_tooltip_hide(const ShellHost *host, const Config *config, ShellTooltip *tip)
 {
-	if (tip->mapped)
-		XUnmapWindow(host->dpy, tip->win);
+	if (tip->win)
+		shell_popup_dismiss(host, config, &tip->exit, tip->win, &tip->surface, config->topbar ? 1 : -1);
+	tip->win = None;
 	tip->mapped = 0;
 }
 
@@ -1507,7 +1506,26 @@ shell_tooltip_close(const ShellHost *host, ShellTooltip *tip)
 	if (tip->win)
 		XDestroyWindow(host->dpy, tip->win);
 	shell_surface_free(host, &tip->surface);
+	shell_popup_exit_reset(host, &tip->exit);
 	*tip = (ShellTooltip){0};
+}
+
+int
+shell_tooltip_motion(const ShellHost *host, const Config *config, ShellTooltip *tip, double now, int frame)
+{
+	int moving = 0;
+	if (tip->mapped) {
+		int offset;
+		moving = shell_popup_entrance(config, tip->opened, now, config->topbar ? 1 : -1, &offset);
+		if (frame && tip->offset != offset) {
+			tip->offset = offset;
+			XMoveWindow(host->dpy, tip->win, tip->geometry.x, tip->geometry.y + offset);
+		}
+		moving |= tip->offset != offset;
+	}
+	if (frame)
+		shell_popup_exit_tick(host, &tip->exit, now);
+	return moving || tip->exit.win;
 }
 
 static void
@@ -1552,7 +1570,7 @@ shell_tooltip_draw(const ShellHost *host, const ShellFont *font, unsigned revisi
 	int height = (rows + !reading)*row + 12;
 	int w = width + 2*pad, h = height + 2*pad;
 	if (w > monitor.w || h + anchor.h + gap > monitor.h) {
-		shell_tooltip_hide(host, tip);
+		shell_tooltip_hide(host, c, tip);
 		return;
 	}
 	int x = roundf(anchor.x + (anchor.w-w)/2);
@@ -1562,16 +1580,18 @@ shell_tooltip_draw(const ShellHost *host, const ShellFont *font, unsigned revisi
 
 	Display *dpy = host->dpy;
 	if (!tip->win) {
+		tip->opened = shell_seconds();
+		shell_popup_entrance(c, tip->opened, tip->opened, c->topbar ? 1 : -1, &tip->offset);
 		XSetWindowAttributes attrs = {.override_redirect = True, .background_pixel = 0,
 		                              .border_pixel = 0, .colormap = host->cmap, .event_mask = ExposureMask};
-		tip->win = XCreateWindow(dpy, host->root, geometry.x, geometry.y, w, h, 0,
+		tip->win = XCreateWindow(dpy, host->root, geometry.x, geometry.y + tip->offset, w, h, 0,
 		                         host->depth, InputOutput, host->visual,
 		                         CWOverrideRedirect | CWBackPixel | CWBorderPixel | CWColormap | CWEventMask, &attrs);
 		XClassHint klass = {"mwm-tooltip", "mwm"};
 		XSetClassHint(dpy, tip->win, &klass);
 		XStoreName(dpy, tip->win, "mwm system tooltip");
 	} else if (memcmp(&geometry, &tip->geometry, sizeof geometry)) {
-		XMoveResizeWindow(dpy, tip->win, geometry.x, geometry.y, w, h);
+		XMoveResizeWindow(dpy, tip->win, geometry.x, geometry.y + tip->offset, w, h);
 	}
 	tip->geometry = geometry;
 	if (!shell_surface_begin(host, font, revision, &tip->surface, tip->win, w, h, 0))
