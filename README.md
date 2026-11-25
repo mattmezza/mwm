@@ -24,6 +24,11 @@ Geist and Geist Mono with an Xresources palette and a Runware-generated Alpine w
 | ![Battery panel showing charge percentage, discharge estimate, and the charge limit](docs/screenshots/battery.webp) | ![mwm command palette with a search field and a list of open windows and tags](docs/screenshots/command-palette.webp) |
 | Click the battery for charge and time remaining. | Open with `mwmc palette` to find windows, jump to tags, or switch layouts. |
 
+| Wi-Fi | Bluetooth |
+| --- | --- |
+| ![Wi-Fi panel showing the current connection, nearby networks, and the VPN tab](docs/screenshots/wifi.webp) | ![Bluetooth panel showing connected and nearby devices](docs/screenshots/bluetooth.webp) |
+| Switch networks or open the VPN tab. | Connect, scan, pair, or make the adapter visible. |
+
 ## Features
 
 - **Tags** — one global pool of up to 100 tags, *shared across monitors*.
@@ -40,6 +45,8 @@ Geist and Geist Mono with an Xresources palette and a Runware-generated Alpine w
 - **CUI bar and panels** with Geist and Geist Mono, rounded segments, animated
   tag selection, a monthly calendar, world clocks and a timer.
 - **XEmbed system tray** styled alongside the other segments.
+- **Wi-Fi and Bluetooth tray applets** with CUI panels, live device status,
+  Wi-Fi and VPN credentials, and Bluetooth pairing prompts.
 - **Command palette** for finding windows, jumping to tags, and changing layouts.
 - **Status from the X11 root window name**, compatible with slstatus.
   `^c#RRGGBB^` changes the current text color and `^d^` restores it.
@@ -57,11 +64,13 @@ Install the latest release on Linux x86-64 or ARM64.
 curl -fsSL https://github.com/mattmezza/mwm/releases/latest/download/install.sh | sh
 ```
 
-The installer checks both executables against the release's SHA-256 manifest
-and installs them in `~/.local/bin`. Put that directory on your `PATH` before
-starting mwm. To upgrade a different installation, set `MWM_BIN_DIR` to its
-existing bin directory. The binaries are statically linked and use your X11
-server and system time-zone data.
+The installer checks the executables against the release's SHA-256 manifest
+and installs them in `~/.local/bin`. It also installs a commented sample in
+`$XDG_CONFIG_HOME/mwm/config.ini` (default `~/.config/mwm/config.ini`) when the
+file is absent. Put the bin directory on your `PATH` before starting mwm. To
+upgrade a different installation, set `MWM_BIN_DIR` to its existing bin
+directory. The binaries are statically linked and use your X11 server and
+system time-zone data.
 
 After updating the binary at the path used by your running session, run
 `mwmc restart` to load it in place. You can combine installation and restart
@@ -77,7 +86,7 @@ run `startx` again. Once the new mwm is running, subsequent upgrades can use
 ## Build from source
 
 Build dependencies include a C11 compiler, make, CMake, Python 3, pkg-config,
-curl, X11, Xext, Xrender, Fontconfig, FreeType, HarfBuzz, and optional Xinerama.
+curl, X11, Xext, Xrender, Fontconfig, FreeType, HarfBuzz, GLib/GIO, and optional Xinerama.
 The first build fetches a pinned [CUI](https://github.com/mattmezza/cui) revision.
 The renderer runs inside the existing X11 host.
 
@@ -94,10 +103,10 @@ Xinerama, comment out the two `XINERAMA*` lines in `config.mk`.
 
 ### Publish a release
 
-Commit the changes you want to ship, then run `make release name=v0.2.0`.
+Commit the changes you want to ship, then run `make release name=v0.3.0`.
 Release tags use `vMAJOR.MINOR.PATCH`.
 The target tags the current commit and pushes the tag to `origin`. GitHub
-Actions builds and smoke-tests `mwm` and `mwmc` for Linux x86-64 and ARM64
+Actions builds and smoke-tests `mwm`, `mwmc`, and `mwm-tray` for Linux x86-64 and ARM64
 before publishing the executable assets and `SHA256SUMS` on the GitHub Release.
 
 ## Running
@@ -275,6 +284,42 @@ Popups slide in and out using `popup_enter`, `popup_exit` (milliseconds),
 and `popup_distance` (pixels) in the same section.
 Set `separators = true` under `[bar]` to draw lines between items in a segment.
 
+### Wi-Fi and Bluetooth
+
+Start the optional tray clients from your X session startup script.
+
+```sh
+mwm-tray wifi &
+mwm-tray bluetooth &
+```
+
+Wi-Fi uses NetworkManager. Scan, choose a saved or new network, join a hidden
+SSID, or activate a saved VPN from the same panel. The applet handles personal
+Wi-Fi passwords, PEAP, TTLS, EAP-TLS and EAP-PWD enrollment, and credential
+requests for existing profiles. The installed VPN plugin handles its own
+authentication protocol. Plugins that expose an external UI use the CUI
+panel for their prompts. `secret-tool` and a session keyring are used for
+NetworkManager profiles that delegate credential storage to a user agent.
+
+Bluetooth uses BlueZ. Scan for nearby devices, pair with PIN or passkey
+prompts, connect or disconnect, make the adapter discoverable, and remove
+paired devices. The panel shows
+battery percentages when BlueZ reports them. Turn off `bluetooth_default_agent`
+to let another app handle pairing initiated elsewhere. Set `wifi_secret_agent`
+to `0` to keep another NetworkManager credential agent for existing profiles.
+Each applet can be launched individually, and the tray can host other XEmbed
+clients alongside them. To replace `nm-applet` and `blueman-applet`, remove
+those commands from your X session startup after verifying the new applets.
+
+Use `[applets]` in the main config for popup width, list length, and adapter
+selection. Set `wifi_interface` or `bluetooth_adapter` if you have multiple
+radios. `mwmc reload` applies config and Xresources changes to both applets.
+For an alternate file use `mwm-tray -c /path/to/config.ini wifi` or the same
+option with `bluetooth`. In a panel, use arrows and Enter to choose an item,
+Space to toggle the radio, R to scan, or Escape to dismiss. Tab switches
+between Wi-Fi and VPN or moves between fields in a prompt. Right-click a
+saved network or paired device to forget it.
+
 Set `segments` under `[bar]` to arrange the left, center, and right groups.
 Order entries from left to right within each group. An entry can be a single
 item or a named segment containing several items. List each item at most once
@@ -363,6 +408,7 @@ startx
 mwm.c          window manager
 mwmc.c         control client
 shell.{c,h}    CUI bar, panels, typography, and timer
+tray*.{c,h}    XEmbed clients, NetworkManager and BlueZ controls and agents
 controls.{c,h} Linux battery, volume, and backlight controls
 mwm_config.*  INI and Xresources loader
 util.{c,h}     die/ecalloc

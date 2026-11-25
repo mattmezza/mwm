@@ -31,9 +31,9 @@ jobs:
           ARCH: ${{ matrix.arch }}
         run: |
           docker build -t mwm-static-build - < .github/static.Dockerfile
-          docker run --rm --user "$(id -u):$(id -g)" --env HOME=/tmp \
+          docker run --rm --env BUILD_UID="$(id -u)" --env BUILD_GID="$(id -g)" --env HOME=/tmp \
             --volume "$PWD:/src" --workdir /src mwm-static-build \
-            sh .github/build-static.sh "${GITHUB_REF_NAME#v}" "$ARCH"
+            sh .github/run-static-build.sh "${GITHUB_REF_NAME#v}" "$ARCH"
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: mwm-${{ matrix.arch }}
@@ -49,7 +49,9 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-          sparse-checkout: install.sh
+          sparse-checkout: |
+            install.sh
+            examples/config.ini
           sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
@@ -62,7 +64,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cp ../install.sh .
-          sha256sum mwm-linux-{x86_64,aarch64} mwmc-linux-{x86_64,aarch64} install.sh > SHA256SUMS
+          cp ../examples/config.ini .
+          sha256sum mwm-linux-{x86_64,aarch64} mwmc-linux-{x86_64,aarch64} mwm-tray-linux-{x86_64,aarch64} config.ini install.sh > SHA256SUMS
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
             --verify-tag --generate-notes --title "mwm $GITHUB_REF_NAME" \
-            mwm-linux-* mwmc-linux-* SHA256SUMS install.sh
+            mwm-linux-* mwmc-linux-* mwm-tray-linux-* config.ini SHA256SUMS install.sh

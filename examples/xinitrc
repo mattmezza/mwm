@@ -12,6 +12,10 @@ slstatus &
 # Keybindings live OUTSIDE mwm: sxhkd maps keys to `mwmc` calls.
 sxhkd -c "$HOME/.config/sxhkd/sxhkdrc" &
 
+# Optional tray panels for NetworkManager and BlueZ.
+# mwm-tray wifi &
+# mwm-tray bluetooth &
+
 # A wallpaper/terminal so the screen isn't blank.
 xsetroot -solid "#16161e"
 # xterm &

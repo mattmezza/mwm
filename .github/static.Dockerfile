@@ -5,7 +5,7 @@ RUN apk add --no-cache \
     libx11-dev libx11-static libxext-dev libxext-static libxrender-dev libxinerama-dev \
     libxcb-static libxau-dev libxdmcp-dev fontconfig-dev fontconfig-static \
     freetype-dev freetype-static harfbuzz-dev libpng-static brotli-static expat-static \
-    bzip2-static zlib-static \
+    bzip2-static zlib-static glib-static pcre2-static util-linux-static \
     font-dejavu tzdata xauth xprop xvfb-run xwininfo
 
 # Alpine ships Xau as a shared library. Build the same release as an archive.
@@ -38,6 +38,17 @@ RUN set -eux; \
 
 ENV PKG_CONFIG_PATH=/usr/local/lib/pkgconfig
 
+# GLib's static GIO uses libmount, which needs libeconf through libblkid.
+RUN set -eux; \
+    cd /tmp; \
+    curl -fsSL --retry 3 https://codeload.github.com/openSUSE/libeconf/tar.gz/refs/tags/v0.8.3 -o libeconf.tar.gz; \
+    echo 'c8855f08d64c06b57a5028a14eec6ddde5e35124f9718031d592b44d8e091f83  libeconf.tar.gz' | sha256sum -c; \
+    tar -xf libeconf.tar.gz; \
+    meson setup econf-build libeconf-0.8.3 --buildtype=release --default-library=static; \
+    ninja -C econf-build libeconf.a; \
+    cp econf-build/libeconf.a /usr/local/lib/; \
+    rm -rf econf-build libeconf-0.8.3 libeconf.tar.gz
+
 # Use a Fontconfig version that can read current desktop configuration files.
 RUN set -eux; \
     apk add --no-cache gperf; \
@@ -54,3 +65,5 @@ RUN set -eux; \
     cp fontconfig.pc /usr/local/lib/pkgconfig/; \
     cd /tmp; \
     rm -rf fontconfig-2.18.4 fontconfig.tar.xz
+
+RUN apk add --no-cache dbus py3-dbus py3-gobject3 su-exec xdotool
