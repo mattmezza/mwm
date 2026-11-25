@@ -40,6 +40,7 @@ typedef struct {
 	int barseggap, segradius, tagradius, titlealign, barfontsize, separators;
 	BarPlacement segments[MAX_BAR_SEGMENTS];
 	int nsegments, custom_segments;
+	unsigned hidden_segments;
 	int timer_indicator;
 	int cpu_interval, cpu_history, cpu_width, gpu_history, gpu_width, ram_history, ram_width;
 	int load_width, network_width, disk_width, tooltip_delay;

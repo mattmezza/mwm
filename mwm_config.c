@@ -414,6 +414,22 @@ config_segment(const Config *c, const char *name)
 }
 
 static int
+read_hidden_segments(Config *c, char *value)
+{
+	unsigned hidden = 0;
+	if (*value) {
+		while (value) {
+			int index = config_segment(c, trim(strsep(&value, ",")));
+			if (index < 0 || (hidden & (1u << index)))
+				return 0;
+			hidden |= 1u << index;
+		}
+	}
+	c->hidden_segments = hidden;
+	return 1;
+}
+
+static int
 read_value(Config *c, const char *section, const char *key, char *v, Rule *rule)
 {
 	int id;
@@ -472,9 +488,9 @@ config_read(Config *c, const char *path, int required, char error[CONFIG_ERROR])
 	char line[1024], section[80] = "";
 	int number = 0;
 	int rule_lines[MAX_RULES] = {0}, tag_lines[MAX_TAGS] = {0};
-	int custom_rules = 0, placement_line = 0, defined = 0;
+	int custom_rules = 0, placement_line = 0, hidden_line = 0, defined = 0;
 	BarPlacement definitions[MAX_BAR_SEGMENTS] = {0};
-	char placement[sizeof line];
+	char placement[sizeof line], hidden[sizeof line] = "";
 	strcpy(placement, default_segments);
 	Rule *rule = NULL;
 	const char *reason = NULL;
@@ -543,6 +559,11 @@ config_read(Config *c, const char *path, int required, char error[CONFIG_ERROR])
 			placement_line = number;
 			continue;
 		}
+		if (!strcmp(section, "bar") && !strcmp(key, "hidden_segments")) {
+			strcpy(hidden, value);
+			hidden_line = number;
+			continue;
+		}
 		if (!strcmp(section, "segments")) {
 			int i = 0;
 			while (i < defined && strcmp(definitions[i].name, key))
@@ -569,6 +590,10 @@ config_read(Config *c, const char *path, int required, char error[CONFIG_ERROR])
 	if (!reason && !read_segments(c, placement, definitions, defined)) {
 		number = placement_line;
 		reason = "invalid segment placement or repeated bar item";
+	}
+	if (!reason && !read_hidden_segments(c, hidden)) {
+		number = hidden_line;
+		reason = "unknown or repeated name in hidden_segments";
 	}
 	c->custom_segments = placement_line != 0;
 	if (!reason && c->battery_critical > c->battery_low)

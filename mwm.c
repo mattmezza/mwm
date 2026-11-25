@@ -150,6 +150,11 @@ typedef struct {
 	Time clipboard_time;
 } RestartBarControls;
 
+typedef struct {
+	char name[SEGMENT_NAME];
+	unsigned char hidden;
+} RestartSegmentOverride;
+
 /* function declarations */
 static void applyrules(Client *c);
 static int applysizehints(Client *c, int *x, int *y, int *w, int *h, int interact);
@@ -3504,13 +3509,20 @@ applystyle(const Config *next)
 		shell_surface_free(&shell, &m->bar.surface);
 		m->bar.last_frame = 0;
 	}
-	unsigned hidden = 0;
-	for (int i = 0; i < settings.nsegments; ++i)
-		if (hidden_segments & (1u << i)) {
-			int index = config_segment(next, settings.segments[i].name);
-			if (index >= 0)
-				hidden |= 1u << index;
-		}
+	unsigned hidden = next->hidden_segments;
+	unsigned overrides = hidden_segments ^ settings.hidden_segments;
+	for (int i = 0; i < settings.nsegments; ++i) {
+		unsigned old_bit = 1u << i;
+		if (!(overrides & old_bit))
+			continue;
+		int index = config_segment(next, settings.segments[i].name);
+		if (index < 0)
+			continue;
+		if (hidden_segments & old_bit)
+			hidden |= 1u << index;
+		else
+			hidden &= ~(1u << index);
+	}
 	hidden_segments = hidden;
 	if (first)
 		controls_init(&controls);
@@ -3863,10 +3875,18 @@ save_session(FILE *file, Window requestor)
 	if (fwrite(&timer.duration, sizeof timer.duration, 1, file) != 1)
 		return 0;
 	char hidden[MAX_BAR_SEGMENTS][SEGMENT_NAME] = {{0}};
-	int nhidden = 0;
-	for (int i = 0; i < settings.nsegments; ++i)
-		if (hidden_segments & (1u << i))
+	RestartSegmentOverride segments[MAX_BAR_SEGMENTS] = {0};
+	unsigned overrides = hidden_segments ^ settings.hidden_segments;
+	int nhidden = 0, noverrides = 0;
+	for (int i = 0; i < settings.nsegments; ++i) {
+		unsigned bit = 1u << i;
+		if (hidden_segments & bit)
 			strcpy(hidden[nhidden++], settings.segments[i].name);
+		if (overrides & bit) {
+			strcpy(segments[noverrides].name, settings.segments[i].name);
+			segments[noverrides++].hidden = (hidden_segments & bit) != 0;
+		}
+	}
 	if (fwrite(hidden, sizeof hidden[0], RestartLegacySegments, file) != RestartLegacySegments)
 		return 0;
 	RestartBarControls bar_controls = {
@@ -3883,6 +3903,8 @@ save_session(FILE *file, Window requestor)
 		return 0;
 	if (fwrite(hidden + RestartLegacySegments, sizeof hidden[0], MAX_BAR_SEGMENTS-RestartLegacySegments, file)
 	    != MAX_BAR_SEGMENTS-RestartLegacySegments)
+		return 0;
+	if (fwrite(segments, sizeof segments, 1, file) != 1)
 		return 0;
 	return fflush(file) == 0 && fseek(file, 0, SEEK_SET) == 0;
 }
@@ -4068,6 +4090,22 @@ resume_session(FILE *file, const RestartState *state)
 	bytes = fread(hidden + RestartLegacySegments, 1, extra_size, file);
 	if (ferror(file) || (bytes && bytes != extra_size))
 		die("mwm: incomplete additional segment state");
+	RestartSegmentOverride segments[MAX_BAR_SEGMENTS];
+	bytes = fread(segments, 1, sizeof segments, file);
+	if (ferror(file) || (bytes && bytes != sizeof segments))
+		die("mwm: incomplete segment override state");
+	/* Older binaries saved only the hidden names and had no startup defaults. */
+	for (int i = 0; i < MAX_BAR_SEGMENTS; ++i) {
+		char *name = bytes ? segments[i].name : hidden[i];
+		name[SEGMENT_NAME-1] = 0;
+		int index = config_segment(&settings, name);
+		if (index < 0)
+			continue;
+		if (!bytes || segments[i].hidden)
+			hidden_segments |= 1u << index;
+		else
+			hidden_segments &= ~(1u << index);
+	}
 	fclose(file);
 
 	/* Retire the previous resources under one grab. The server reparents and
@@ -4094,12 +4132,6 @@ resume_session(FILE *file, const RestartState *state)
 	bar_controls.backlight_device[sizeof bar_controls.backlight_device-1] = 0;
 	if (!strcmp(bar_controls.backlight_device, settings.backlight_device))
 		controls.reading[ControlBrightness].brightness_restore = bar_controls.brightness_restore;
-	for (int i = 0; i < MAX_BAR_SEGMENTS; ++i) {
-		hidden[i][SEGMENT_NAME-1] = 0;
-		int index = config_segment(&settings, hidden[i]);
-		if (index >= 0)
-			hidden_segments |= 1u << index;
-	}
 	if (timer.active)
 		timer.duration = isfinite(timer_duration) && timer_duration > 0 ? timer_duration
 		                 : fmax(1, shell_timer_remaining(&timer, time(NULL), shell_seconds()));

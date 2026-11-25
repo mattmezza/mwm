@@ -30,12 +30,31 @@ focused() {
     "$control" query state | grep -F "sel=$1"
 }
 
+segment_state() {
+    "$control" segment list | grep -Fx "$1 $2"
+}
+
 ${CC:-cc} -o "$dir/client" tests/restart-client.c -lX11
 cp "$wm" "$dir/mwm"
 cp examples/config.ini "$dir/config.ini"
+printf '\n[bar]\nhidden_segments = system, datetime\n' >>"$dir/config.ini"
 "$dir/mwm" -c "$dir/config.ini" >"$dir/wm.log" 2>&1 &
 wm_pid=$!
 eventually "$control" version
+segment_state system hidden
+segment_state datetime hidden
+segment_state power shown
+"$control" segment toggle system
+segment_state system shown
+"$control" segment hide power
+
+cp "$dir/config.ini" "$dir/valid.ini"
+printf '\nhidden_segments = unknown\n' >>"$dir/config.ini"
+if "$control" reload >"$dir/reply" 2>&1; then exit 1; fi
+grep -F 'unknown or repeated name in hidden_segments' "$dir/reply"
+segment_state system shown
+mv "$dir/valid.ini" "$dir/config.ini"
+printf '\nsegments = tags, title | | status, power, datetime, system, tray\n' >>"$dir/config.ini"
 
 "$dir/client" first >"$dir/first" &
 first_pid=$!
@@ -69,6 +88,9 @@ mwm.systemdanger: #de3041
 mwm.systemwarn: #c98720
 mwm.traysuccess: #2aaf79'
 "$control" reload
+segment_state system shown
+segment_state datetime hidden
+segment_state power hidden
 tray_docked >/dev/null
 test "$parent" = "$tray_before"
 reloaded_colors='0x1212, 0x3434, 0x5656, 0xdede, 0x3030, 0x4141, 0xc9c9, 0x8787, 0x2020, 0x2a2a, 0xafaf, 0x7979'
@@ -85,8 +107,12 @@ xwininfo -id "$(cat "$dir/first")" >"$dir/geometry"
 old=$(stat -Lc %i "/proc/$wm_pid/exe")
 cp "$wm" "$dir/new"
 mv -f "$dir/new" "$dir/mwm"
+printf '\nhidden_segments = system\n' >>"$dir/config.ini"
 "$control" restart
 test "$old" != "$(stat -Lc %i "/proc/$wm_pid/exe")"
+segment_state system shown
+segment_state datetime shown
+segment_state power hidden
 for topic in windows tags monitors state; do
     "$control" query "$topic" | diff -u "$dir/$topic" -
 done
@@ -101,6 +127,11 @@ tray_viewable() {
 eventually tray_viewable
 "$control" win toggle full
 "$control" query windows | grep -F 'float=1 full=0 sticky=0 focused=1 "second"'
+printf '\nhidden_segments = datetime\n' >>"$dir/config.ini"
+"$control" reload
+segment_state system shown
+segment_state datetime hidden
+segment_state power hidden
 
 printf 'int main(void) { return 0; }\n' | ${CC:-cc} -x c -o "$dir/bad" -
 mv -f "$dir/bad" "$dir/mwm"

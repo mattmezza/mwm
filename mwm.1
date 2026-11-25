@@ -63,6 +63,14 @@ and applies Xresources for appearance. Use
 .B mwmc reload
 to re-read both. The source includes an example in examples/config.ini.
 .PP
+Set
+.B hidden_segments
+under
+.B [bar]
+to a comma-separated list of configured segment names to start them hidden.
+They remain available through
+.BR "mwmc segment toggle NAME" .
+.PP
 After installing a replacement to the running mwm executable's path, use
 .B mwmc restart
 to load it in place and restore the existing session.

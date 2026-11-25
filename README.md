@@ -354,11 +354,12 @@ applet exits. The list uses the same `[applets]` width and row settings as
 the other panels. Older nod builds still support Do Not Disturb in the
 applet. [nod](https://github.com/mattmezza/nod)
 
+### Bar segments
+
 Set `segments` under `[bar]` to arrange the left, center, and right groups.
 Order entries from left to right within each group. An entry can be a single
 item or a named segment containing several items. List each item at most once
-across the bar. Omit a segment from the placement to leave it out, or use
-`mwmc segment toggle <name>` to control its visibility at runtime.
+across the bar. Omit a segment from the placement to remove it from the bar.
 
 ```ini
 [bar]
@@ -374,6 +375,19 @@ datetime = date, time
 These are the defaults. For separate power segments, replace `power` with
 `battery, volume, brightness` in `[bar]`. You can also name your own groups,
 for example `essentials = time, volume` in `[segments]`.
+
+To start with the system monitoring segment hidden, keep `system` in the
+placement and add this setting under `[bar]`.
+
+```ini
+hidden_segments = system
+```
+
+The list is empty by default and accepts comma-separated placement names,
+including custom groups and single items. Use `mwmc reload` to apply changes
+and `mwmc segment toggle system` or its keyboard shortcut to show or hide the
+segment during the session. Reload and hot restart preserve live toggles for
+segments whose configured visibility stays the same.
 
 ## Configuration
 
