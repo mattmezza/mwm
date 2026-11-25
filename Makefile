@@ -12,7 +12,7 @@ CUI_LIBS = $(CUI_BUILD)/libcui_software.a $(CUI_BUILD)/libcui_text.a \
 
 SRC = mwm.c mwm_config.c shell.c controls.c activity.c util.c
 OBJ = $(SRC:.c=.o)
-TRAY_OBJ = tray.o tray_ui.o tray_bus.o tray_wifi.o tray_secrets.o tray_bluetooth.o
+TRAY_OBJ = tray.o tray_ui.o tray_bus.o tray_wifi.o tray_secrets.o tray_bluetooth.o tray_nod.o
 
 all: mwm mwmc mwm-tray
 

@@ -16,6 +16,10 @@ sxhkd -c "$HOME/.config/sxhkd/sxhkdrc" &
 # mwm-tray wifi &
 # mwm-tray bluetooth &
 
+# Optional notifications panel. Start both on the same session D-Bus.
+# nod &
+# mwm-tray notifications &
+
 # A wallpaper/terminal so the screen isn't blank.
 xsetroot -solid "#16161e"
 # xterm &

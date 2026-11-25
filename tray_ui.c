@@ -27,6 +27,9 @@ static const char *glyphs[GlyphCount] = {
 	[GlyphMouse] = "<rect x='6' y='2.5' width='12' height='19' rx='6'/><path d='M12 6v4'/>",
 	[GlyphComputer] = "<rect x='5' y='4' width='14' height='12' rx='1.5'/><path d='m5 16-2.5 4h19L19 16m-9 1.5h4'/>",
 	[GlyphGamepad] = "<path d='M8 7h8a4 4 0 0 1 3.9 3l1.1 4.5a2.4 2.4 0 0 1-4 2.4L14.7 15H9.3L7 17a2.4 2.4 0 0 1-4-2.4l1.1-4.5A4 4 0 0 1 8 7Z'/><path d='M8 10v4m-2-2h4m5-1h.01m3 2h.01'/>",
+	[GlyphBell] = "<path d='M10 20a2 2 0 0 0 4 0M18 9a6 6 0 0 0-12 0c0 4.5-1 6-2 7.5h16C19 15 18 13.5 18 9Z'/>",
+	[GlyphBellOff] = "<path d='m3 3 18 18m-11-1a2 2 0 0 0 4 0M6.4 7A6 6 0 0 0 6 9c0 4.5-1 6-2 7.5h12.5M10.2 3.3A6 6 0 0 1 18 9c0 2 .2 3.5.6 4.7'/>",
+	[GlyphClose] = "<path d='m6 6 12 12M18 6 6 18'/>",
 };
 
 static void
@@ -66,6 +69,8 @@ main_icon(const Tray *tray)
 {
 	if (tray->kind == TrayBluetooth)
 		return tray->enabled ? GlyphBluetooth : GlyphBluetoothOff;
+	if (tray->kind == TrayNotifications)
+		return tray->enabled ? GlyphBellOff : GlyphBell;
 	return tray->enabled ? signal_icon(tray->strength) : GlyphWifiOff;
 }
 
@@ -90,6 +95,8 @@ tray_ui_icon(Tray *tray)
 	cui_context *ui = win->icon_surface.ui;
 	cui_color fg = tray->config.palette[SchemeStatus][ColFg], bg = tray->config.palette[SchemeStatus][ColBg];
 	cui_color icon = tray->enabled ? win->accent : cui_color_mix_oklab(bg, fg, 0.63f);
+	if (tray->kind == TrayNotifications)
+		icon = tray->available && !tray->enabled ? win->accent : cui_color_mix_oklab(bg, fg, 0.63f);
 	if (tray->answer)
 		icon = tray->config.usage_palette[UsageWarning];
 	if (!h->composited || h->depth != 32) {
@@ -104,6 +111,8 @@ tray_ui_icon(Tray *tray)
 	int size = MIN(22, MIN(w, height) - 2);
 	if (size > 0)
 		glyph(win, ui, 30, (w-size)/2, (height-size)/2, size, main_icon(tray), icon);
+	if (tray->kind == TrayNotifications && tray->unread && size > 7)
+		box(ui, 31, (cui_rect){(w+size)/2-5, (height-size)/2, 5, 5}, 3, win->accent, bg, 1);
 	shell_surface_draw(h, &win->icon_surface, win->icon, NULL, 0, 0);
 }
 
@@ -133,7 +142,23 @@ tray_row(Tray *tray, int index)
 	return NULL;
 }
 
-enum { Header = 85, Footer = 35, RowSpacing = 44 };
+TrayEntry *
+tray_expanded(Tray *tray)
+{
+	TrayWindow *win = tray->window;
+	if (!win->expanded)
+		return NULL;
+	for (guint i = 0; i < tray->rows->len; ++i) {
+		TrayEntry *row = tray->rows->pdata[i];
+		if (!strcmp(win->expanded, row->id))
+			return row;
+	}
+	g_clear_pointer(&win->expanded, g_free);
+	return NULL;
+}
+
+enum { Header = 85, Footer = 35, RowSpacing = 44,
+       NotifyHeader = 74, NotifyToolbar = 34, NotifyRow = 74, NotifyFooter = 28 };
 
 int
 tray_ui_height(Tray *tray, int available)
@@ -145,6 +170,14 @@ tray_ui_height(Tray *tray, int available)
 		win->fields_visible = MIN(tray->prompt.count, MAX(1, (available-chrome)/56));
 		win->field_scroll = CLAMP(win->field_scroll, 0, MAX(0, tray->prompt.count-win->fields_visible));
 		return MIN(available, chrome + 56*win->fields_visible);
+	}
+	if (tray->kind == TrayNotifications) {
+		int chrome = NotifyHeader+NotifyToolbar+NotifyFooter;
+		int rows = MAX(0, (available-chrome)/NotifyRow);
+		win->visible_rows = MIN(MIN(rows, tray->config.applet_rows), (int)tray->rows->len);
+		int content = tray_expanded(tray) ? CLAMP((int)ceilf(win->detail_bounds.h)+4, NotifyRow, 4*NotifyRow)
+		                                  : MAX(1, win->visible_rows)*NotifyRow;
+		return MIN(available, chrome+content);
 	}
 	int toolbar = tray->kind == TrayWifi ? 75 : 41;
 	int rows = MAX(1, (available-Header-Footer-toolbar)/RowSpacing);
@@ -288,6 +321,109 @@ list_panel(Tray *tray, Drawing *d, int x, int y, int w)
 }
 
 static void
+text_button(Drawing *d, int id, cui_rect rect, const char *label, enum TrayHitKind kind)
+{
+	if (inside(rect, d->win->hover_x, d->win->hover_y))
+		box(d->ui, id, rect, d->radius, d->card, transparent, 0);
+	text_at(d, id+1, rect, label, d->accent, d->size-4, medium, CUI_ALIGN_CENTER);
+	hit(d, rect, kind, 0, NULL);
+}
+
+static void
+notification_remove(Drawing *d, int id, cui_rect rect, const char *row)
+{
+	gboolean hover = inside(rect, d->win->hover_x, d->win->hover_y);
+	if (hover)
+		box(d->ui, id, rect, d->radius, d->line, transparent, 0);
+	glyph(d->win, d->ui, id+1, rect.x+5, rect.y+5, 14, GlyphClose, hover ? d->fg : d->muted);
+	hit(d, rect, HitForget, 0, row);
+}
+
+static void
+notification_detail(Drawing *d, TrayEntry *entry, int x, int y, int w)
+{
+	TrayWindow *v = d->win;
+	text_button(d, 430, (cui_rect){x, y+2, 58, 25}, "‹ Back", HitBack);
+	notification_remove(d, 433, (cui_rect){x+w-26, y+2, 24, 24}, entry->id);
+	y += NotifyToolbar;
+	int height = MAX(0, v->pad+v->height-13-y);
+	box(d->ui, 435, (cui_rect){x, y, w, height}, d->radius, d->card, d->line, 1);
+	if (height < 20)
+		return;
+	cui_rect clip = {x+12, y+9, w-24, height-18};
+	v->detail_viewport = clip.h;
+	v->detail_scroll = CLAMP(v->detail_scroll, 0, MAX(0, (int)v->detail_bounds.h-v->detail_viewport));
+	cui_begin_absolute_box(d->ui, 436, (cui_box){.width = clip.w, .height = clip.h, .clip = true,
+	                       .offset_y = -v->detail_scroll}, clip);
+	cui_begin_box(d->ui, 437, (cui_box){.width = clip.w, .gap = 5});
+	cui_text_ex(d->ui, cui_string(entry->detail), d->size-5, d->muted, d->size, mono);
+	cui_text_ex(d->ui, cui_string(entry->label), d->size, d->fg, d->size+4, medium);
+	if (*entry->body)
+		cui_text_ex(d->ui, cui_string(entry->body), d->size-3, d->fg, d->size+3, regular);
+	cui_end_box(d->ui);
+	cui_end_box(d->ui);
+	cui_track_bounds(d->ui, 437, &v->detail_bounds);
+}
+
+static void
+notifications_panel(Tray *tray, Drawing *d, int x, int y, int w)
+{
+	TrayWindow *v = d->win;
+	int total = tray->rows->len;
+	v->scroll = CLAMP(v->scroll, 0, MAX(0, total-v->visible_rows));
+	v->selected = MIN(v->selected, total-1);
+	box(d->ui, 400, (cui_rect){x, y+13, 40, 40}, d->radius, d->card, d->line, 1);
+	glyph(v, d->ui, 401, x+8, y+21, 24, main_icon(tray), d->accent);
+	text_at(d, 402, (cui_rect){x+51, y+10, w-123, 25}, v->title, d->fg, d->size+1, medium, CUI_ALIGN_START);
+	text_at(d, 403, (cui_rect){x+51, y+35, w-123, 20}, tray->headline, d->muted, d->size-4, regular, CUI_ALIGN_START);
+	if (tray->available)
+		button(d, 404, (cui_rect){x+w-61, y+17, 61, 30}, tray->enabled ? "On" : "Off", HitRadio, 0,
+		       tray->enabled, !tray->busy);
+	y += NotifyHeader;
+	box(d->ui, 406, (cui_rect){x, y-4, w, 1}, 0, d->line, transparent, 0);
+	TrayEntry *expanded = tray_expanded(tray);
+	if (expanded) {
+		notification_detail(d, expanded, x, y, w);
+		return;
+	}
+	text_at(d, 407, (cui_rect){x, y, w-95, 28}, "Recent", d->fg, d->size-3, medium, CUI_ALIGN_START);
+	if (total)
+		text_button(d, 408, (cui_rect){x+w-77, y+1, 77, 25}, "Clear all", HitClear);
+	y += NotifyToolbar;
+	for (int i = 0; i < v->visible_rows; ++i) {
+		int index = v->scroll+i;
+		TrayEntry *row = tray->rows->pdata[index];
+		int id = 500+i*8;
+		cui_rect r = {x, y+i*NotifyRow, w, NotifyRow-6};
+		gboolean hover = inside(r, v->hover_x, v->hover_y) || index == v->selected;
+		cui_color fill = hover ? cui_color_mix_oklab(d->bg, d->accent, 0.18f) : d->card;
+		box(d->ui, id, r, d->radius, fill, transparent, 0);
+		if (row->active)
+			box(d->ui, id+1, (cui_rect){r.x+5, r.y+9, 2, r.h-18}, 1, d->danger, transparent, 0);
+		text_at(d, id+2, (cui_rect){r.x+12, r.y+4, w-48, 20}, row->label,
+		        d->fg, d->size-2, medium, CUI_ALIGN_START);
+		g_autofree char *preview = tray_label(row->body);
+		text_at(d, id+3, (cui_rect){r.x+12, r.y+25, w-24, 19}, preview,
+		        d->fg, d->size-4, regular, CUI_ALIGN_START);
+		text_at(d, id+4, (cui_rect){r.x+12, r.y+46, w-24, 16}, row->detail,
+		        d->muted, d->size-5, mono, CUI_ALIGN_START);
+		hit(d, r, HitRow, index, row->id);
+		notification_remove(d, id+5, (cui_rect){r.x+w-30, r.y+4, 24, 24}, row->id);
+	}
+	if (!total) {
+		const char *empty = !tray->available ? tray->subtitle : !tray->history_available ? "Update nod to view recent notifications"
+		                    : "No recent notifications";
+		text_at(d, 412, (cui_rect){x, y, w, 46}, empty, d->muted, d->size-4, regular, CUI_ALIGN_CENTER);
+	}
+	char page[64] = "";
+	if (total > v->visible_rows && v->visible_rows)
+		snprintf(page, sizeof page, "%d–%d of %d", v->scroll+1, v->scroll+v->visible_rows, total);
+	const char *status = tray->message && *tray->message ? tray->message : page;
+	text_at(d, 413, (cui_rect){x, v->pad+v->height-NotifyFooter, w, NotifyFooter-4}, status,
+	        tray->failed ? d->danger : d->muted, d->size-5, regular, CUI_ALIGN_START);
+}
+
+static void
 prompt_panel(Tray *tray, Drawing *d, int x, int y, int w)
 {
 	TrayWindow *v = d->win;
@@ -361,9 +497,14 @@ tray_ui_panel(Tray *tray)
 		g_free(v->hits[i].row);
 	v->count = 0;
 	int margin = 15;
+	int detail_height = (int)v->detail_bounds.h;
 	if (tray->answer)
 		prompt_panel(tray, &d, v->pad+margin, v->pad, v->width-2*margin);
+	else if (tray->kind == TrayNotifications)
+		notifications_panel(tray, &d, v->pad+margin, v->pad, v->width-2*margin);
 	else
 		list_panel(tray, &d, v->pad+margin, v->pad, v->width-2*margin);
 	shell_surface_draw(&v->host, &v->panel_surface, v->panel, &body, c->panelradius, v->pad);
+	if (v->expanded && (int)v->detail_bounds.h != detail_height)
+		tray_changed(tray);
 }

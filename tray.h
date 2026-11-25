@@ -6,12 +6,13 @@
 
 #define PROPERTIES "org.freedesktop.DBus.Properties"
 
-enum TrayKind { TrayWifi, TrayBluetooth };
-enum TrayAction { TrayToggle, TrayScan, TrayRow, TrayForget, TrayHidden, TrayVisible };
+enum TrayKind { TrayWifi, TrayBluetooth, TrayNotifications, TrayKindCount };
+enum TrayAction { TrayToggle, TrayScan, TrayRow, TrayForget, TrayHidden, TrayVisible, TrayClear };
 enum TrayIcon { TraySignal, TrayDevice, TrayVpn, TrayHeadphones, TrayKeyboard, TrayMouse, TrayComputer, TrayGamepad, TrayIconCount };
 
 typedef struct {
-	char *id, *label, *detail;
+	char *id, *label, *detail, *body;
+	guint64 received;
 	enum TrayIcon icon;
 	int active, saved, strength;
 } TrayEntry;
@@ -36,10 +37,12 @@ struct Tray {
 	enum TrayKind kind;
 	Config config;
 	GDBusObjectManagerClient *manager;
+	GDBusConnection *session;
 	const char *service, *manager_path;
 	char *owner;
 	guint refresh_id;
 	gboolean connected, available, enabled, scanning, can_scan, discoverable, busy;
+	gboolean unread, history_available;
 	int strength;
 	char *headline, *subtitle, *message;
 	gboolean failed;
@@ -53,7 +56,9 @@ struct Tray {
 
 void tray_changed(Tray *);
 gboolean tray_popup(Tray *);
+gboolean tray_panel_open(Tray *);
 void tray_hide(Tray *);
+void tray_nod_claim(Tray *, gboolean);
 void tray_model(Tray *, const char *headline, const char *subtitle);
 TrayEntry *tray_entry(Tray *, const char *id, const char *label, const char *detail,
                       enum TrayIcon, gboolean active, gboolean saved, int strength);
@@ -86,5 +91,7 @@ void bluetooth_owner(Tray *);
 void bluetooth_model(Tray *);
 void bluetooth_action(Tray *, enum TrayAction, const char *);
 void bluetooth_configure(Tray *);
+void nod_start(Tray *);
+void nod_action(Tray *, enum TrayAction, const char *);
 
 #endif

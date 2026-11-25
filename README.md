@@ -47,6 +47,8 @@ Geist and Geist Mono with an Xresources palette and a Runware-generated Alpine w
 - **XEmbed system tray** styled alongside the other segments.
 - **Wi-Fi and Bluetooth tray applets** with CUI panels, live device status,
   Wi-Fi and VPN credentials, and Bluetooth pairing prompts.
+- **nod notification applet** with recent notifications, unread indication,
+  and Do Not Disturb controls.
 - **Command palette** for finding windows, jumping to tags, and changing layouts.
 - **Status from the X11 root window name**, compatible with slstatus.
   `^c#RRGGBB^` changes the current text color and `^d^` restores it.
@@ -319,6 +321,20 @@ option with `bluetooth`. In a panel, use arrows and Enter to choose an item,
 Space to toggle the radio, R to scan, or Escape to dismiss. Tab switches
 between Wi-Fi and VPN or moves between fields in a prompt. Right-click a
 saved network or paired device to forget it.
+
+### Notifications
+
+Start `nod` and `mwm-tray notifications` from your X startup on the same
+session D-Bus. Click the bell to read recent notifications, open a message,
+or clear history. Right-click the bell or press Space in the recent list to
+toggle Do Not Disturb. A slashed bell indicates muted banners and a dot
+indicates new notifications since you last opened the panel.
+
+With a version of nod that provides notification history, the applet takes
+over nod's tray slot while running and nod restores its own icon when the
+applet exits. The list uses the same `[applets]` width and row settings as
+the other panels. Older nod builds still support Do Not Disturb in the
+applet. [nod](https://github.com/mattmezza/nod)
 
 Set `segments` under `[bar]` to arrange the left, center, and right groups.
 Order entries from left to right within each group. An entry can be a single

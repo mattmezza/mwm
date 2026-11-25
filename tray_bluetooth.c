@@ -455,6 +455,7 @@ bluetooth_action(Tray *tray, enum TrayAction action, const char *id)
 		}
 		return;
 	case TrayHidden:
+	case TrayClear:
 		return;
 	case TrayVisible: {
 		if (!tray->enabled)

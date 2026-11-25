@@ -9,6 +9,7 @@ free_entry(gpointer data)
 	g_free(entry->id);
 	g_free(entry->label);
 	g_free(entry->detail);
+	g_free(entry->body);
 	g_free(entry);
 }
 
@@ -107,7 +108,7 @@ tray_field(Tray *tray, const char *key, const char *label, const char *value,
 GDBusConnection *
 tray_connection(Tray *tray)
 {
-	return tray->manager ? g_dbus_object_manager_client_get_connection(tray->manager) : NULL;
+	return tray->manager ? g_dbus_object_manager_client_get_connection(tray->manager) : tray->session;
 }
 
 GDBusProxy *
@@ -238,6 +239,10 @@ void
 tray_bus_start(Tray *tray)
 {
 	tray->rows = g_ptr_array_new_with_free_func(free_entry);
+	if (tray->kind == TrayNotifications) {
+		nod_start(tray);
+		return;
+	}
 	tray->service = tray->kind == TrayWifi ? "org.freedesktop.NetworkManager" : "org.bluez";
 	tray->manager_path = tray->kind == TrayWifi ? "/org/freedesktop" : "/";
 	g_dbus_object_manager_client_new_for_bus(G_BUS_TYPE_SYSTEM, G_DBUS_OBJECT_MANAGER_CLIENT_FLAGS_DO_NOT_AUTO_START,
@@ -307,6 +312,8 @@ tray_action(Tray *tray, enum TrayAction action, const char *id)
 	tray_status(tray, FALSE, "");
 	if (tray->kind == TrayWifi)
 		wifi_action(tray, action, id);
-	else
+	else if (tray->kind == TrayBluetooth)
 		bluetooth_action(tray, action, id);
+	else
+		nod_action(tray, action, id);
 }
