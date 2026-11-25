@@ -12,8 +12,9 @@ CUI_LIBS = $(CUI_BUILD)/libcui_software.a $(CUI_BUILD)/libcui_text.a \
 
 SRC = mwm.c mwm_config.c shell.c controls.c activity.c util.c
 OBJ = $(SRC:.c=.o)
+TRAY_OBJ = tray.o tray_ui.o tray_bus.o tray_wifi.o tray_secrets.o tray_bluetooth.o
 
-all: mwm mwmc
+all: mwm mwmc mwm-tray
 
 .c.o:
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $<
@@ -42,6 +43,15 @@ mwm: $(OBJ) $(CUI_READY)
 mwmc: mwmc.o util.o
 	$(CC) $(LDFLAGS) -o $@ mwmc.o util.o $(X11_LIBS)
 
+$(TRAY_OBJ): %.o: %.c $(CUI_READY) shell.h mwm_config.h tray.h config.mk
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(TRAY_CFLAGS) -c $<
+
+tray.o tray_ui.o: tray_window.h
+tray_wifi.o tray_secrets.o: tray_wifi.h
+
+mwm-tray: $(TRAY_OBJ) shell.o mwm_config.o controls.o activity.o $(CUI_READY)
+	$(CC) $(LDFLAGS) -o $@ $(TRAY_OBJ) shell.o mwm_config.o controls.o activity.o $(CUI_LIBS) $(LIBS) $(TRAY_LIBS)
+
 mwmc.o: mwmc.c completions.h
 
 # embed the shell completion scripts into mwmc (so the binary alone can emit
@@ -65,13 +75,14 @@ font_assets.h: fonts/Geist-Regular.ttf fonts/Geist-Medium.ttf fonts/GeistMono-Re
 	done > $@
 
 clean:
-	rm -f mwm mwmc $(OBJ) mwmc.o completions.h font_assets.h mwm-$(VERSION).tar.gz
+	rm -f mwm mwmc mwm-tray $(OBJ) $(TRAY_OBJ) mwmc.o completions.h font_assets.h mwm-$(VERSION).tar.gz
 
 install: all
 	mkdir -p $(DESTDIR)$(PREFIX)/bin
 	dir="$(DESTDIR)$(PREFIX)/bin"; stage=$$(mktemp -d "$$dir/.mwm-install.XXXXXXXX") && \
 	trap 'rm -rf "$$stage"' EXIT && \
-	install -m 755 mwm mwmc "$$stage" && \
+	install -m 755 mwm mwmc mwm-tray "$$stage" && \
+	mv -f "$$stage/mwm-tray" "$$dir/mwm-tray" && \
 	mv -f "$$stage/mwmc" "$$dir/mwmc" && mv -f "$$stage/mwm" "$$dir/mwm"
 	mkdir -p $(DESTDIR)$(MANPREFIX)/man1
 	sed "s/VERSION/$(VERSION)/g" mwm.1 > $(DESTDIR)$(MANPREFIX)/man1/mwm.1 2>/dev/null || true
@@ -86,6 +97,7 @@ install: all
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/mwm \
 	      $(DESTDIR)$(PREFIX)/bin/mwmc \
+	      $(DESTDIR)$(PREFIX)/bin/mwm-tray \
 	      $(DESTDIR)$(MANPREFIX)/man1/mwm.1 \
 	      $(DESTDIR)$(MANPREFIX)/man1/mwmc.1 \
 	      $(DESTDIR)$(PREFIX)/share/bash-completion/completions/mwmc \

@@ -517,7 +517,7 @@ config_read(Config *c, const char *path, int required, char error[CONFIG_ERROR])
 				*rule = (Rule){.floating = -1};
 			} else {
 				const char *sections[] = {"bar", "layout", "theme", "motion", "tray", "panels", "clock", "system",
-				                          "timezones", "tags", "tag_monitors", "segments", "controls"};
+				                          "timezones", "tags", "tag_monitors", "segments", "controls", "applets"};
 				size_t i = 0;
 				while (i < COUNT(sections) && strcmp(section, sections[i]))
 					++i;

@@ -1,6 +1,7 @@
 # Build artifacts
 mwm
 mwmc
+mwm-tray
 *.o
 config.h
 completions.h
