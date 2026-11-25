@@ -1833,19 +1833,17 @@ buttonpress(XEvent *e)
 	/* forward button press on the tray window to the icon under the cursor */
 	if (systray && ev->window == systray->win) {
 		Client *i;
-		int off = 0;
 		for (i = systray->icons; i; i = i->next) {
-			if (ev->x >= off && ev->x < off + (int)i->w
+			if (ev->x >= i->x && ev->x < i->x + i->w
 			    && ev->y >= 0 && ev->y < i->h) {
 				XButtonEvent fwd = *ev;
 				fwd.window = i->win;
-				fwd.x -= off;
+				fwd.x -= i->x;
 				fwd.subwindow = None;
 				XSendEvent(dpy, i->win, True, ButtonPressMask, (XEvent *)&fwd);
 				XSync(dpy, False);
 				return;
 			}
-			off += i->w + settings.systrayspacing;
 		}
 		return;
 	}
@@ -2697,6 +2695,10 @@ dockicon(Window icon, const XWindowAttributes *wa, Client **link)
 {
 	Client *c = ecalloc(1, sizeof(Client));
 	c->win = icon;
+	XClassHint ch = {0};
+	updateclass(c, &ch);
+	if (ch.res_class) XFree(ch.res_class);
+	if (ch.res_name) XFree(ch.res_name);
 	c->depth = wa->depth;
 	c->tag = -1;
 	c->next = *link;
@@ -2844,10 +2846,17 @@ updatesystray(void)
 		drawbars();
 	}
 
-	for (i = systray->icons; i; i = i->next) {
-		XMoveResizeWindow(dpy, i->win, w, 0, i->w, i->h);
-		XMapWindow(dpy, i->win);
-		w += i->w + settings.systrayspacing;
+	/* Keep dock order intact for hot restart and config reload. */
+	for (int tail = 0; tail <= settings.notificationslast; ++tail) {
+		for (i = systray->icons; i; i = i->next) {
+			int last = settings.notificationslast && !strcmp(i->instance, "mwm-notifications-icon");
+			if (last != tail)
+				continue;
+			i->x = w;
+			XMoveResizeWindow(dpy, i->win, i->x, 0, i->w, i->h);
+			XMapWindow(dpy, i->win);
+			w += i->w + settings.systrayspacing;
+		}
 	}
 	w = w ? w - settings.systrayspacing : 0;
 	int inset = shell_bar_inset(&settings) + settings.systrayvertpad;

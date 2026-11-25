@@ -16,7 +16,7 @@ cleanup() {
             cat "$log" >&2
         done
     fi
-    for pid in ${wm_pid:-} ${services_pid:-} ${wifi_pid:-} ${bt_pid:-}; do
+    for pid in ${wm_pid:-} ${services_pid:-} ${wifi_pid:-} ${bt_pid:-} ${bell_pid:-}; do
         kill "$pid" 2>/dev/null || true
     done
     rm -rf "$dir"
@@ -36,6 +36,11 @@ seen() { grep -Fx "$1" "$dir/events.log"; }
 icon() { xdotool search --onlyvisible --name "^$1$"; }
 panel() { xdotool search --onlyvisible --name "^mwm $1$"; }
 no_panel() { ! panel "$1"; }
+xpos() { xwininfo -id "$1" | awk '/Relative upper-left X:/ { print $NF }'; }
+bell_is_last() {
+    bell_x=$(xpos "$bell_id")
+    [ "$bell_x" -gt "$(xpos "$wifi_id")" ] && [ "$bell_x" -gt "$(xpos "$bt_id")" ]
+}
 key() { xdotool key --clearmodifiers "$@"; }
 enter() { xdotool type --clearmodifiers "$1"; key Return; }
 
@@ -168,6 +173,19 @@ eventually no_panel Bluetooth
 
 wifi_id=$(icon Wi-Fi)
 bt_id=$(icon Bluetooth)
+"$tray" -c "$dir/config.ini" notifications >"$dir/bell.log" 2>&1 &
+bell_pid=$!
+eventually icon Notifications
+bell_id=$(icon Notifications)
+eventually bell_is_last
+
+printf '\n[tray]\nnotificationslast = false\n' >>"$dir/config.ini"
+"$control" reload
+test "$(xpos "$bell_id")" -eq 0
+printf 'notificationslast = true\n' >>"$dir/config.ini"
+"$control" reload
+eventually bell_is_last
+
 printf '\n[applets]\nwidth = 410\n' >>"$dir/config.ini"
 "$control" reload
 open Wi-Fi
@@ -180,6 +198,8 @@ eventually icon Wi-Fi
 eventually icon Bluetooth
 test "$wifi_id" = "$(icon Wi-Fi)"
 test "$bt_id" = "$(icon Bluetooth)"
+test "$bell_id" = "$(icon Notifications)"
+eventually bell_is_last
 open Bluetooth
 key Escape
 eventually no_panel Bluetooth
@@ -207,4 +227,4 @@ if xwininfo -id "$palette_id" >/dev/null 2>&1; then
     exit 1
 fi
 key Escape
-printf 'Wi-Fi, VPN, Bluetooth, config reload, popup motion and tray handoff passed.\n'
+printf 'Wi-Fi, VPN, Bluetooth, notification ordering, config reload, popup motion and tray handoff passed.\n'

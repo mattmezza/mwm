@@ -71,8 +71,7 @@ and installs them in `~/.local/bin`. It also installs a commented sample in
 `$XDG_CONFIG_HOME/mwm/config.ini` (default `~/.config/mwm/config.ini`) when the
 file is absent. Put the bin directory on your `PATH` before starting mwm. To
 upgrade a different installation, set `MWM_BIN_DIR` to its existing bin
-directory. The binaries are statically linked and use your X11 server and
-system time-zone data.
+directory. The release binaries are statically linked.
 
 After updating the binary at the path used by your running session, run
 `mwmc restart` to load it in place. You can combine installation and restart
@@ -84,6 +83,23 @@ without `--restart` and launch the new mwm once. If you start mwm with `startx`
 and mwm is the last command in `~/.xinitrc`, save your work, run `mwmc quit`, and
 run `startx` again. Once the new mwm is running, subsequent upgrades can use
 `mwmc restart` to keep the X session open.
+
+### Runtime dependencies
+
+mwm needs a running X11 server on Linux. Install `tzdata` for local time and
+named time zones. The release installer uses `sh`, `curl`, CA certificates,
+and standard utilities including `awk`, `sha256sum`, and `mktemp`.
+
+| Feature | What it needs |
+| --- | --- |
+| Wi-Fi and VPN applet | NetworkManager on the system D-Bus, plus the NetworkManager plugin for each VPN protocol you use. Profiles with user-agent credentials also need `secret-tool` (usually from libsecret) and a Secret Service keyring on the session bus. |
+| Bluetooth applet | BlueZ (`bluetoothd`) on the system D-Bus and a Bluetooth adapter. |
+| Notifications applet | nod on the same X screen and session D-Bus. Recent history and native tray replacement require nod v0.2.0 or later. [nod releases](https://github.com/mattmezza/nod/releases) |
+| Timer alerts | `notify-send` (usually from libnotify) and a notification daemon such as nod, or your configured timer hook. |
+| Volume | `wpctl` from WirePlumber and a running PipeWire audio session. |
+| Brightness | A Linux backlight device. Changing brightness needs `brightnessctl` and permission to control the device. |
+| Battery and activity charts | Linux `/proc` and `/sys`. Battery and GPU readings depend on the counters exposed by your hardware and drivers. |
+| Bar and popup transparency and shadows | An X11 compositor such as picom. |
 
 ## Build from source
 
@@ -105,7 +121,7 @@ Xinerama, comment out the two `XINERAMA*` lines in `config.mk`.
 
 ### Publish a release
 
-Commit the changes you want to ship, then run `make release name=v0.3.0`.
+Commit the changes you want to ship, then run `make release name=v0.4.0`.
 Release tags use `vMAJOR.MINOR.PATCH`.
 The target tags the current commit and pushes the tag to `origin`. GitHub
 Actions builds and smoke-tests `mwm`, `mwmc`, and `mwm-tray` for Linux x86-64 and ARM64
@@ -279,6 +295,8 @@ Run `mwmc reload` to publish the palette to docked apps. A cached icon can pick
 up the new colors the next time the app updates its image. Full-color icons
 keep their original colors.
 Set `systraymon` in `[tray]` to pin it to a zero-based monitor index.
+The notification bell stays at the far right of the tray by default. Set
+`notificationslast = false` in `[tray]` to use the usual docking order.
 The whole bar slides in from its screen edge and reverses the motion to close.
 Individual segments can also slide open and closed. Adjust timing with
 `duration` in `[motion]`, or enable `reduced_motion` for immediate changes.

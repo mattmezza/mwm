@@ -47,7 +47,7 @@ typedef struct {
 	int controls_interval, battery_low, battery_critical, battery_step, volume_step, brightness_step;
 	int brightness_min, controls_width;
 	char battery_device[64], backlight_device[64], audio_sink[64];
-	int showsystray, showtraybar, systraymon, systrayspacing, systrayvertpad;
+	int showsystray, showtraybar, systraymon, systrayspacing, systrayvertpad, notificationslast;
 	int applet_width, applet_rows, wifi_secret_agent, bluetooth_default_agent;
 	char wifi_interface[64], bluetooth_adapter[64];
 	int panelradius, panel_opacity, calendar_width, clock_width, palette_width;
