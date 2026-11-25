@@ -14,6 +14,7 @@ main(int argc, char **argv)
 	Window win = XCreateSimpleWindow(dpy, root, 40, 80, tray ? 18 : 500, tray ? 18 : 350, 0, 0, 0);
 	XStoreName(dpy, win, argv[1]);
 	if (tray) {
+		XSetWindowBackgroundPixmap(dpy, win, ParentRelative);
 		Window owner = XGetSelectionOwner(dpy, XInternAtom(dpy, "_NET_SYSTEM_TRAY_S0", False));
 		if (!owner)
 			return 2;

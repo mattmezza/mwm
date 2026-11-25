@@ -69,9 +69,16 @@ eventually focused second
 "$control" win toggle full
 "$dir/client" tray >"$dir/icon" &
 icon_pid=$!
+window_parent() {
+    xwininfo -id "$1" -tree | awk '/Parent window id:/ { print $4 }'
+}
 tray_docked() {
     [ -s "$dir/icon" ] || return 1
-    parent=$(xwininfo -id "$(cat "$dir/icon")" -tree | awk '/Parent window id:/ { print $4 }')
+    parent=$(window_parent "$(cat "$dir/icon")")
+    [ -n "$parent" ] || return 1
+    if ! xprop -id "$parent" WM_CLASS | grep -qF 'mwm-tray'; then
+        parent=$(window_parent "$parent")
+    fi
     [ -n "$parent" ] || return 1
     xprop -id "$parent" WM_CLASS | grep -F 'mwm-tray'
 }

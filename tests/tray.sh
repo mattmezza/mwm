@@ -37,6 +37,7 @@ icon() { xdotool search --onlyvisible --name "^$1$"; }
 panel() { xdotool search --onlyvisible --name "^mwm $1$"; }
 no_panel() { ! panel "$1"; }
 xpos() { xwininfo -id "$1" | awk '/Relative upper-left X:/ { print $NF }'; }
+depth() { xwininfo -id "$1" | awk '/Depth:/ { print $2 }'; }
 bell_is_last() {
     bell_x=$(xpos "$bell_id")
     [ "$bell_x" -gt "$(xpos "$wifi_id")" ] && [ "$bell_x" -gt "$(xpos "$bt_id")" ]
@@ -178,6 +179,8 @@ bell_pid=$!
 eventually icon Notifications
 bell_id=$(icon Notifications)
 eventually bell_is_last
+tray_id=$(xwininfo -id "$bell_id" -tree | awk '/Parent window id:/ { print $4 }')
+test "$(depth "$bell_id")" = "$(depth "$tray_id")"
 
 printf '\n[tray]\nnotificationslast = false\n' >>"$dir/config.ini"
 "$control" reload

@@ -78,7 +78,8 @@ struct Client {
 	int bw, oldbw;
 	int tag;
 	int isfixed, isfloating, isurgent, neverfocus, oldstate, isfullscreen, issticky;
-	int depth; /* XEmbed icons can have a different visual from the tray. */
+	int depth; /* XEmbed icon depth */
+	Window tray_slot; /* matching-visual parent, when different from the tray */
 	Client *next;   /* attach/tile order (global list) */
 	Client *snext;  /* focus stack order (global list)  */
 	Window win;
@@ -109,7 +110,7 @@ typedef struct {
 typedef struct Systray {
 	Window win;
 	Client *icons;
-	int monitor, x, y, width, height, mapped;
+	int monitor, x, y, width, height, mapped, composited;
 	XRectangle clip;
 	unsigned long bg;
 } Systray;
@@ -219,7 +220,7 @@ static Client *nexttiled(Client *c, int t);
 static int occupied(int t);
 static void propertynotify(XEvent *e);
 static Monitor *recttomon(int x, int y, int w, int h);
-static void removesystrayicon(Client *i);
+static void removesystrayicon(Client *i, int destroyed);
 static void resize(Client *c, int x, int y, int w, int h, int interact);
 static void resizeclient(Client *c, int x, int y, int w, int h);
 static void resizerequest(XEvent *e);
@@ -287,7 +288,6 @@ static void zoom(void);
 #define XEMBED_WINDOW_ACTIVATE      1
 #define XEMBED_FOCUS_IN             4
 #define XEMBED_MODALITY_ON         10
-#define XEMBED_MAPPED          (1 << 0)
 #define VERSION_MAJOR               0
 #define VERSION_MINOR               0
 #define XEMBED_EMBEDDED_VERSION ((VERSION_MAJOR << 16) | VERSION_MINOR)
@@ -2035,7 +2035,7 @@ destroynotify(XEvent *e)
 	if ((c = wintoclient(ev->window)))
 		unmanage(c, 1);
 	else if ((c = wintosystrayicon(ev->window))) {
-		removesystrayicon(c);
+		removesystrayicon(c, 1);
 		updatesystray();
 	}
 }
@@ -2053,7 +2053,7 @@ unmapnotify(XEvent *e)
 			unmanage(c, 0);
 	} else if (ev->event != root && (c = wintosystrayicon(ev->window))) {
 		/* KDE/GTK panel icons sometimes unmap themselves; re-embed */
-		removesystrayicon(c);
+		removesystrayicon(c, 0);
 		updatesystray();
 	}
 }
@@ -2681,8 +2681,18 @@ painttray(XRectangle clip)
 	}
 }
 
+static void
+detachtrayicon(Client *icon)
+{
+	XUnmapWindow(dpy, icon->win);
+	if (icon->depth == DefaultDepth(dpy, screen))
+		XSetWindowBackgroundPixmap(dpy, icon->win, None);
+	XReparentWindow(dpy, icon->win, root, 0, 0);
+	XRemoveFromSaveSet(dpy, icon->win);
+}
+
 void
-removesystrayicon(Client *i)
+removesystrayicon(Client *i, int destroyed)
 {
 	Client **ii;
 
@@ -2692,6 +2702,11 @@ removesystrayicon(Client *i)
 		;
 	if (*ii)
 		*ii = i->next;
+	if (i->tray_slot) {
+		if (!destroyed)
+			detachtrayicon(i);
+		XDestroyWindow(dpy, i->tray_slot);
+	}
 	free(i);
 }
 
@@ -2712,15 +2727,29 @@ dockicon(Window icon, const XWindowAttributes *wa, Client **link)
 	c->isfloating = 1;
 	updatesizehints(c);
 	updatesystrayicongeom(c, wa->width, wa->height);
+
+	Window parent = systray->win;
+	if (wa->visual != visual) {
+		/* ParentRelative requires the same depth as the embedder. */
+		XSetWindowAttributes attrs = {
+			.colormap = wa->colormap, .border_pixel = 0,
+			.background_pixel = c->depth == DefaultDepth(dpy, screen) ? systray->bg : 0,
+		};
+		c->tray_slot = XCreateWindow(dpy, parent, 0, 0, c->w, c->h, 0, c->depth, InputOutput,
+		                            wa->visual, CWColormap | CWBackPixel | CWBorderPixel, &attrs);
+		parent = c->tray_slot;
+	}
 	XAddToSaveSet(dpy, icon);
-	XReparentWindow(dpy, icon, systray->win, 0, 0);
+	/* Embedded icons have no WM_STATE. A compositor can otherwise mistake
+	 * an opaque icon for the tray's top-level client and discard tray alpha. */
+	XDeleteProperty(dpy, icon, wmatom[WMState]);
+	XReparentWindow(dpy, icon, parent, 0, 0);
 	XSelectInput(dpy, icon, wa->your_event_mask | StructureNotifyMask | PropertyChangeMask | ResizeRedirectMask);
 	XSetWindowBorderWidth(dpy, icon, 0);
 	if (c->depth == DefaultDepth(dpy, screen))
 		XSetWindowBackgroundPixmap(dpy, icon, ParentRelative);
 	sendevent(icon, xatom[Xembed], StructureNotifyMask, CurrentTime, XEMBED_EMBEDDED_NOTIFY, 0,
-	          systray->win, XEMBED_EMBEDDED_VERSION);
-	setclientstate(c, NormalState);
+	          parent, XEMBED_EMBEDDED_VERSION);
 }
 
 void
@@ -2744,8 +2773,6 @@ updatesystrayicongeom(Client *i, int w, int h)
 void
 updatesystrayiconstate(Client *i, XPropertyEvent *ev)
 {
-	long flags;
-	int code = 0;
 	Atom type;
 	int fmt;
 	unsigned long nitems, after;
@@ -2759,16 +2786,10 @@ updatesystrayiconstate(Client *i, XPropertyEvent *ev)
 		if (data) XFree(data);
 		return;
 	}
-	flags = ((long *)data)[1];
-	if (flags & XEMBED_MAPPED) {
-		code = XEMBED_WINDOW_ACTIVATE;
-		XMapRaised(dpy, i->win);
-		setclientstate(i, NormalState);
-	} else {
-		code = XEMBED_WINDOW_ACTIVATE; /* keep activated */
-		XMapRaised(dpy, i->win);
-	}
-	sendevent(i->win, xatom[Xembed], StructureNotifyMask, CurrentTime, code, 0, systray->win, XEMBED_EMBEDDED_VERSION);
+	/* Keep docked icons mapped and activated. */
+	XMapRaised(dpy, i->win);
+	sendevent(i->win, xatom[Xembed], StructureNotifyMask, CurrentTime, XEMBED_WINDOW_ACTIVATE, 0,
+	          systray->win, XEMBED_EMBEDDED_VERSION);
 	XFree(data);
 }
 
@@ -2788,6 +2809,14 @@ setsystraycolors(void)
 	                PropModeReplace, (unsigned char *)rgb, LENGTH(rgb));
 }
 
+static void
+setsystrayvisual(void)
+{
+	long v = XVisualIDFromVisual(shell.composited ? visual : DefaultVisual(dpy, screen));
+	XChangeProperty(dpy, systray->win, netatom[NetSystemTrayVisual], XA_VISUALID, 32,
+	                PropModeReplace, (unsigned char *)&v, 1);
+}
+
 void
 updatesystray(void)
 {
@@ -2803,9 +2832,9 @@ updatesystray(void)
 		return;
 	drawbar(m);
 
-	/* The bar paints the segment. Keep only the XEmbed icon strip in the
-	 * default visual so legacy icons can use a ParentRelative background. */
 	unsigned long traybg = shell_rgb(settings.palette[SchemeStatus][ColBg]);
+	/* Preserve child alpha so the compositor can blend the icons over the bar. */
+	unsigned long background = shell.composited ? 0 : traybg | (depth == 32 ? 0xff000000UL : 0);
 
 	if (!systray) {
 		systray = ecalloc(1, sizeof(Systray));
@@ -2813,23 +2842,20 @@ updatesystray(void)
 		systray->x = m->mx + m->mw;
 		systray->y = m->by;
 		systray->bg = traybg;
+		systray->composited = shell.composited;
 		wa.override_redirect = True;
 		wa.event_mask = ButtonPressMask | SubstructureNotifyMask;
-		wa.background_pixel = traybg;
+		wa.background_pixel = background;
 		wa.border_pixel = 0;
+		wa.colormap = cmap;
 		systray->win = XCreateWindow(dpy, root, systray->x, systray->y, 1, bh, 0,
-		                             DefaultDepth(dpy, screen), InputOutput,
-		                             DefaultVisual(dpy, screen),
-		                             CWOverrideRedirect | CWEventMask | CWBackPixel | CWBorderPixel, &wa);
+		                             depth, InputOutput, visual,
+		                             CWOverrideRedirect | CWEventMask | CWBackPixel | CWBorderPixel | CWColormap, &wa);
 		XClassHint klass = {"mwm-tray", "mwm"};
 		XSetClassHint(dpy, systray->win, &klass);
 		XChangeProperty(dpy, systray->win, netatom[NetSystemTrayOrientation], XA_CARDINAL, 32,
 		                PropModeReplace, (unsigned char *)&netatom[NetSystemTrayOrientationHorz], 1);
-		{
-			long v = XVisualIDFromVisual(DefaultVisual(dpy, screen));
-			XChangeProperty(dpy, systray->win, netatom[NetSystemTrayVisual], XA_VISUALID, 32,
-			                PropModeReplace, (unsigned char *)&v, 1);
-		}
+		setsystrayvisual();
 		XChangeProperty(dpy, systray->win, netatom[NetWMWindowType], XA_ATOM, 32,
 		                PropModeReplace, (unsigned char *)&netatom[NetWMWindowTypeDock], 1);
 		setsystraycolors();
@@ -2858,8 +2884,12 @@ updatesystray(void)
 			if (last != tail)
 				continue;
 			i->x = w;
-			XMoveResizeWindow(dpy, i->win, i->x, 0, i->w, i->h);
+			XMoveResizeWindow(dpy, i->win, i->tray_slot ? 0 : i->x, 0, i->w, i->h);
 			XMapWindow(dpy, i->win);
+			if (i->tray_slot) {
+				XMoveResizeWindow(dpy, i->tray_slot, i->x, 0, i->w, i->h);
+				XMapWindow(dpy, i->tray_slot);
+			}
 			w += i->w + settings.systrayspacing;
 		}
 	}
@@ -2870,10 +2900,20 @@ updatesystray(void)
 		systray->clip = (XRectangle){0};
 	systray->width = w;
 	systray->height = height;
-	if (systray->bg != traybg) {
-		XSetWindowBackground(dpy, systray->win, traybg);
+	if (systray->bg != traybg || systray->composited != shell.composited) {
+		XSetWindowBackground(dpy, systray->win, background);
 		XClearWindow(dpy, systray->win);
+		if (systray->bg != traybg) {
+			for (i = systray->icons; i; i = i->next)
+				if (i->tray_slot && i->depth == DefaultDepth(dpy, screen)) {
+					XSetWindowBackground(dpy, i->tray_slot, traybg);
+					XClearArea(dpy, i->win, 0, 0, 0, 0, True);
+				}
+		}
+		if (systray->composited != shell.composited)
+			setsystrayvisual();
 		systray->bg = traybg;
+		systray->composited = shell.composited;
 	}
 	if (!w || (!barvisible && !bar_level) || !settings.showsystray)
 		painttray((XRectangle){0});
@@ -3749,11 +3789,7 @@ cleanup(void)
 		while (systray->icons) {
 			Client *icon = systray->icons;
 			systray->icons = icon->next;
-			XUnmapWindow(dpy, icon->win);
-			if (icon->depth == DefaultDepth(dpy, screen))
-				XSetWindowBackgroundPixmap(dpy, icon->win, None);
-			XReparentWindow(dpy, icon->win, root, 0, 0);
-			XRemoveFromSaveSet(dpy, icon->win);
+			detachtrayicon(icon);
 			free(icon);
 		}
 		XDestroyWindow(dpy, systray->win);
