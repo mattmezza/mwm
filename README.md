@@ -236,7 +236,11 @@ The default config assigns tag 1 to monitor 0. Set `1 = -1` under
   it for the previous one.
 - The system segment shows CPU, GPU, and RAM history, three load averages,
   mirrored download and upload traffic, and separate disk read and write histories.
-  CPU and GPU charts show temperatures in °C when Linux exposes the sensors.
+  CPU and GPU hover popups show temperatures in °C when Linux exposes the sensors.
+  Set `show_temperature = true` under `[system]` to also show them beside the charts.
+  Readings use the theme's `monofont` (Geist Mono by default) and turn red
+  (`systemdanger`) at or above `cpu_temp_critical` (90 °C) or
+  `gpu_temp_critical` (85 °C). Both thresholds can be set under `[system]`.
   GPU readings use AMD busy percentage or Intel i915 active time when available.
   Hover over a metric to see its reading and the shared
   update interval. Scroll up for faster sampling or down for slower sampling,

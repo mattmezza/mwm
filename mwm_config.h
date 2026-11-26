@@ -43,6 +43,7 @@ typedef struct {
 	unsigned hidden_segments;
 	int timer_indicator;
 	int cpu_interval, cpu_history, cpu_width, gpu_history, gpu_width, ram_history, ram_width;
+	int show_temperature, cpu_temp_critical, gpu_temp_critical;
 	int load_width, network_width, disk_width, tooltip_delay;
 	char gpu_device[64], network_interface[64], disk_device[64];
 	int controls_interval, battery_low, battery_critical, battery_step, volume_step, brightness_step;

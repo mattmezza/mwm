@@ -959,10 +959,17 @@ usage_temperature(const ShellSystem *system, int metric)
 static int
 bar_temperature(const Frame *f, const Temperature *sensor, char *text, size_t size)
 {
-	if (!sensor || !sensor->path[0])
+	if (!f->config->show_temperature || !sensor || !sensor->path[0])
 		return 0;
 	snprintf(text, size, "%d°C", (int)round(sensor->millidegrees / 1000.0));
 	return MAX(textwidth(f, "000°C", f->size, mono), textwidth(f, text, f->size, mono));
+}
+
+static cui_color
+temperature_color(const Config *c, int metric, int millidegrees, cui_color fg)
+{
+	int critical = metric == UsageCpu ? c->cpu_temp_critical : c->gpu_temp_critical;
+	return millidegrees >= critical * 1000 ? c->usage_palette[UsageDanger] : fg;
 }
 
 static cui_color
@@ -1023,7 +1030,8 @@ bar_usage(Frame *f, ShellUsageChart *chart, const ShellUsage *usage, const Tempe
 	int temperature_width = bar_temperature(f, sensor, temperature, sizeof temperature);
 	if (temperature_width && width >= UsageMinWidth + SystemGap + temperature_width) {
 		cui_rect value = {r.x+r.w-temperature_width, r.y, temperature_width, r.h};
-		label(f, id+1, value, temperature, fg, f->size, mono, CUI_ALIGN_END);
+		label(f, id+1, value, temperature, temperature_color(f->config, kind, sensor->millidegrees, fg),
+		      f->size, mono, CUI_ALIGN_END);
 		width -= SystemGap + temperature_width;
 	}
 	if (width < UsageMinWidth)
@@ -1694,8 +1702,9 @@ shell_tooltip_draw(const ShellHost *host, const ShellFont *font, unsigned revisi
 	}
 	if (sensor) {
 		cui_rect line = {pad+padding, pad+6+row, inner, row};
+		cui_color color = sensor->path[0] ? temperature_color(c, metric, sensor->millidegrees, fg) : muted;
 		label(&f, 4, line, "Temperature", muted, size-1, regular, CUI_ALIGN_START);
-		label(&f, 5, line, temperature, sensor->path[0] ? fg : muted, size, mono, CUI_ALIGN_END);
+		label(&f, 5, line, temperature, color, size, mono, CUI_ALIGN_END);
 	}
 	if (!reading) {
 		char interval[24];
@@ -1910,9 +1919,12 @@ calendar(Frame *f, const ShellPanel *p, const struct tm *local, cui_color fg,
 	box(f, 140, (cui_rect){x+17, y+56, w-34, 1}, 0, card, transparent, 0, 0);
 	button(f, 310, (cui_rect){x+17, y+h-44, 80, 32}, "Today", ActToday, card, fg, 0);
 	char today[80];
+	float date_size = MAX(9, f->size-1);
+	cui_rect date = {x+108, y+h-44, w-125, 32};
 	strftime(today, sizeof today, "%A, %d %B", local);
-	label(f, 320, (cui_rect){x+108, y+h-44, w-125, 32}, today, muted,
-	      MAX(9, f->size-1), regular, CUI_ALIGN_END);
+	if (textwidth(f, today, date_size, mono) > date.w)
+		strftime(today, sizeof today, "%a, %d %b", local);
+	label(f, 320, date, today, muted, date_size, mono, CUI_ALIGN_END);
 	if (p->calendar_view != CalendarDays) {
 		calendar_grid(f, p, fg, accent, ink, card);
 		return;
