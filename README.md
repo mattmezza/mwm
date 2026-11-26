@@ -376,6 +376,10 @@ choose **Keep layout** or **Revert** in the panel. Undocked restores the
 previous layout if its confirmation timer expires. **Open Undocked** opens the
 editor for arranging displays, changing modes and managing presets.
 
+**Side by side** aligns the bottom edges, and **Stacked** aligns horizontal
+centers. With three displays, **Two above, one below** aligns the upper pair
+by their vertical centers and centers the lower display beneath them.
+
 Under `[applets]`, set `display_visibility` to `external` (the default),
 `always` or `never`. Undocked reports which connected outputs are external.
 The panel shares the other applets' width and row settings. Use
