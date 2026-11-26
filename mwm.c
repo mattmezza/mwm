@@ -21,6 +21,7 @@
 #include <math.h>
 #include <poll.h>
 #include <signal.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -233,7 +234,7 @@ static void run(void);
 static const char *restart(Window requestor);
 static void scan(void);
 static int sendevent(Window w, Atom proto, int mask, long d0, long d1, long d2, long d3, long d4);
-static void sendmon(Client *c, int tag);
+static void sendmon(Client *c, int tag, int direction);
 static void setclientstate(Client *c, long state);
 static void setfocus(Client *c);
 static void setfullscreen(Client *c, int fullscreen);
@@ -322,6 +323,9 @@ static void (*handler[LASTEvent]) (XEvent *) = {
 };
 static Atom wmatom[WMLast], netatom[NetLast], xatom[XLast], mwmatom[MwmLast], xa_utf8;
 static Atom clipboard, selection_targets, selection_timestamp;
+static Atom tag_slide_selection, window_motion_atom;
+static Window reflow_compositor, reflow_new_window;
+static int scanning_clients;
 static char *clipboard_title;
 static Time clipboard_time;
 static int running = 1;
@@ -958,6 +962,74 @@ dirtomon(int dir)
 
 /* ---- tags / monitors actions ---------------------------------------- */
 
+/* The compositor owns this selection only when it supports the protocol. */
+enum { TagSlideBegin = 1, TagSlideWindow, TagSlideCommit, TagSlideCancel, TileReflow,
+       TagTransferBegin, TagTransferAcrossBegin };
+enum { TagViews = 1, TagTransfers = 2 };
+enum { WindowEnter = 1, WindowExit = 2, WindowReflow = 4 };
+
+static void
+publish_window_motion(void)
+{
+	unsigned long motion = 0;
+	if (config_motion_enabled(&settings)) {
+		motion |= settings.window_enter ? WindowEnter : 0;
+		motion |= settings.window_exit ? WindowExit : 0;
+		motion |= settings.window_reflow ? WindowReflow : 0;
+	}
+	XChangeProperty(dpy, root, window_motion_atom, XA_CARDINAL, 32, PropModeReplace,
+	                (unsigned char *)&motion, 1);
+}
+
+static void
+motion_message(Window compositor, long op, long a, long b, long c, long d)
+{
+	XEvent event = {.xclient = {.type = ClientMessage, .window = compositor,
+	                          .message_type = tag_slide_selection, .format = 32,
+	                          .data.l = {op, a, b, c, d}}};
+	XSendEvent(dpy, compositor, False, NoEventMask, &event);
+}
+
+static void
+cancel_tag_slides(int effects)
+{
+	Window compositor = XGetSelectionOwner(dpy, tag_slide_selection);
+	if (compositor)
+		motion_message(compositor, TagSlideCancel, effects, 0, 0, 0);
+}
+
+static unsigned long
+motion_size(int width, int height)
+{
+	if (width <= 0 || width > UINT16_MAX || height <= 0 || height > UINT16_MAX)
+		return 0;
+	return (unsigned long)width << 16 | (unsigned long)height;
+}
+
+static Window
+begin_tag_slide(const Monitor *m, int from, int to, int direction)
+{
+	unsigned long size = motion_size(m->mw, m->mh);
+	if (from == to || !settings.tag_slide || !settings.tag_slide_duration || !config_motion_enabled(&settings)
+	    || !size)
+		return None;
+	int count = 0;
+	for (Client *c = clients; c; c = c->next)
+		if (!c->issticky && (c->tag == from || c->tag == to))
+			++count;
+	if (count == 0 || count > 4096)
+		return None;
+	Window compositor = XGetSelectionOwner(dpy, tag_slide_selection);
+	if (!compositor)
+		return None;
+	motion_message(compositor, TagSlideBegin, m->mx, m->my, size,
+	               direction * settings.tag_slide_duration);
+	for (Client *c = clients; c; c = c->next)
+		if (!c->issticky && (c->tag == from || c->tag == to))
+			motion_message(compositor, TagSlideWindow, c->win, c->tag == from, c->x, c->y);
+	return compositor;
+}
+
 /* parse a tag argument that is a name or 1-based number; cur is fallback */
 int
 settag(const char *arg, int cur)
@@ -970,14 +1042,15 @@ void
 viewtag(const char *arg)
 {
 	int t, cur = selmon->seltag;
-	int i;
+	int i, from = cur, direction = 0;
 	Monitor *o, *old = selmon;
+	Window compositor;
 
 	if (!strcmp(arg, "next") || !strcmp(arg, "prev")) {
-		int dir = arg[0] == 'n' ? 1 : -1;
-		t = cur < 0 ? (dir > 0 ? -1 : tagcount()) : cur;
+		direction = arg[0] == 'n' ? 1 : -1;
+		t = cur < 0 ? (direction > 0 ? -1 : tagcount()) : cur;
 		for (i = 0; i < tagcount(); i++) {
-			t = (t + dir + tagcount()) % tagcount();
+			t = (t + direction + tagcount()) % tagcount();
 			/* land on the next tag that is free or already ours; skip tags
 			 * currently shown on another monitor, then claim a free one */
 			if (tagstate[t].mon < 0 || tagstate[t].mon == selmon->num) {
@@ -998,49 +1071,105 @@ viewtag(const char *arg)
 		tagstate[t].mon = selmon->num;
 		selmon->seltag = t;
 	} else {
+		from = o->seltag;
 		o->seltag = t;
 		selmon = o;
 	}
 done:
+	if (!direction)
+		direction = t > from ? 1 : -1;
+	compositor = begin_tag_slide(selmon, from, t, direction);
 	if (selmon != old)
 		warptomon(selmon);
 	arrange(NULL);
 	focus(NULL);
+	if (compositor)
+		motion_message(compositor, TagSlideCommit, settings.tag_slide_easing, 0, 0, 0);
 	drawbars();
 }
 
 void
-sendmon(Client *c, int tag)
+sendmon(Client *c, int tag, int direction)
 {
 	if (c->tag == tag)
 		return;
+
+	Monitor *from = clientmon(c), *to = montag(tag);
+	int leaving = from && from->seltag == c->tag;
+	int arriving = to && to->seltag == tag;
+	Window compositor = None;
+	int transfer = 0;
+	unsigned long old_size = 0;
+	/* Dragging already places the window where the pointer left it. */
+	if (direction && (leaving || arriving) && !c->issticky && config_motion_enabled(&settings)) {
+		int reflow = settings.window_reflow && !c->isfloating && !c->isfullscreen &&
+		             ((leaving && tagstate[c->tag].layout != 2) ||
+		              (arriving && tagstate[tag].layout != 2));
+		Monitor *m = leaving ? from : to;
+		unsigned long monitor_size = motion_size(m->mw, m->mh);
+		old_size = motion_size(WIDTH(c), HEIGHT(c));
+		if (settings.window_tag_slide && settings.tag_slide_duration && monitor_size && old_size) {
+			transfer = leaving && arriving ? TagTransferAcrossBegin : TagTransferBegin;
+		}
+		if (transfer || reflow)
+			compositor = XGetSelectionOwner(dpy, tag_slide_selection);
+		if (compositor && transfer) {
+			motion_message(compositor, transfer, m->mx, m->my, monitor_size,
+			               direction * settings.tag_slide_duration);
+			motion_message(compositor, TagSlideWindow, c->win, leaving, c->x, c->y);
+		}
+		if (reflow)
+			reflow_compositor = compositor;
+		reflow_new_window = c->win;
+	}
 	unfocus(c, 1);
 	c->tag = tag;
+	if (direction && from && to && from != to) {
+		int dx = to->wx - from->wx, dy = to->wy - from->wy;
+		if (c->isfullscreen) {
+			int oldx = c->oldx, oldy = c->oldy, oldw = c->oldw, oldh = c->oldh;
+			resizeclient(c, to->mx, to->my, to->mw, to->mh);
+			c->oldx = oldx + dx;
+			c->oldy = oldy + dy;
+			c->oldw = oldw;
+			c->oldh = oldh;
+		} else if (c->isfloating || tagstate[tag].layout == 2) {
+			int x = MAX(to->wx, MIN(c->x + dx, to->wx + to->ww - WIDTH(c)));
+			int y = MAX(to->wy, MIN(c->y + dy, to->wy + to->wh - HEIGHT(c)));
+			resizeclient(c, x, y, c->w, c->h);
+		}
+	}
 	focus(NULL);
 	arrange(NULL);
+	reflow_compositor = reflow_new_window = None;
+	/* Cross-monitor transfers also use the original size and destination monitor. */
+	if (compositor && transfer)
+		motion_message(compositor, TagSlideCommit, settings.tag_slide_easing, old_size,
+		               to ? to->mx : 0, to ? to->my : 0);
 }
 
 void
 movewintotag(const char *arg)
 {
 	Client *c = selmon->sel;
-	int t, cur;
+	int t, cur, direction = 0;
 
 	if (!c)
 		return;
 	cur = c->tag;
-	if (!strcmp(arg, "next"))
-		t = (cur + 1) % tagcount();
-	else if (!strcmp(arg, "prev"))
-		t = (cur - 1 + tagcount()) % tagcount();
-	else
+	if (!strcmp(arg, "next") || !strcmp(arg, "prev")) {
+		direction = arg[0] == 'n' ? 1 : -1;
+		t = (cur + direction + tagcount()) % tagcount();
+	} else {
 		t = settag(arg, cur);
+		direction = t > cur ? 1 : -1;
+	}
 	if (t == cur)
 		return;
 	/* ensure target tag has an owner monitor (else it would vanish) */
 	if (tagstate[t].mon < 0)
 		tagstate[t].mon = selmon->num;
-	sendmon(c, t);
+	sendmon(c, t, direction);
 	drawbars();
 }
 
@@ -1172,7 +1301,7 @@ static double bar_tick;
 static void
 animate_bar(double tick)
 {
-	int duration = shapeext && !settings.reduced_motion ? settings.duration : 0;
+	int duration = shapeext && config_motion_enabled(&settings) ? settings.duration : 0;
 	float previous = bar_level;
 	bar_level = shell_reveal(&whole_bar, barvisible, bar_tick ? tick-bar_tick : 0, duration);
 	bar_tick = tick;
@@ -1299,7 +1428,7 @@ movemouse(void)
 	XUngrabPointer(dpy, CurrentTime);
 	/* dragged onto another monitor: hand the window to that monitor's tag */
 	if ((m = recttomon(c->x + c->w / 2, c->y + c->h / 2, 1, 1)) != selmon && m->seltag >= 0) {
-		sendmon(c, m->seltag);
+		sendmon(c, m->seltag, 0);
 		selmon = m;
 		focus(c);
 	}
@@ -1385,7 +1514,7 @@ movewinmon(int dir)
 		tagstate[t].mon = m->num;
 		m->seltag = t;
 	}
-	sendmon(c, t);
+	sendmon(c, t, dir);
 	drawbars();
 }
 
@@ -1552,6 +1681,8 @@ resizeclient(Client *c, int x, int y, int w, int h)
 	c->oldw = c->w; c->w = wc.width = w;
 	c->oldh = c->h; c->h = wc.height = h;
 	wc.border_width = c->bw;
+	if (reflow_compositor && c->win != reflow_new_window && !c->isfloating && !c->isfullscreen)
+		motion_message(reflow_compositor, TileReflow, c->win, 0, 0, 0);
 	XConfigureWindow(dpy, c->win, CWX|CWY|CWWidth|CWHeight|CWBorderWidth, &wc);
 	configure(c);
 	if (settings.roundcorners && !c->isfullscreen)
@@ -1968,6 +2099,7 @@ configurenotify(XEvent *e)
 		sw = ev->width;
 		sh = ev->height;
 		if (updategeom(0)) {
+			cancel_tag_slides(0);
 			for (m = mons; m; m = m->next) {
 				for (c = clients; c; c = c->next)
 					if (c->isfullscreen && clientmon(c) == m)
@@ -2464,6 +2596,17 @@ dispatchcmd(int argc, char **argv, char *reply, size_t rsz)
 
 /* ---- manage / unmanage ---------------------------------------------- */
 
+static void
+arrange_after_client_change(Monitor *m, const Client *c, Window entering)
+{
+	if (running && !scanning_clients && m && c->tag == m->seltag && tagstate[c->tag].layout != 2 &&
+	    !c->isfloating && !c->isfullscreen && settings.window_reflow && config_motion_enabled(&settings))
+		reflow_compositor = XGetSelectionOwner(dpy, tag_slide_selection);
+	reflow_new_window = entering;
+	arrange(m);
+	reflow_compositor = reflow_new_window = None;
+}
+
 void
 manage(Window w, XWindowAttributes *wa)
 {
@@ -2527,7 +2670,7 @@ manage(Window w, XWindowAttributes *wa)
 		unfocus(selmon->sel, 0);
 	if (clientmon(c))
 		clientmon(c)->sel = c;
-	arrange(clientmon(c));
+	arrange_after_client_change(clientmon(c), c, c->win);
 	XMapWindow(dpy, c->win);
 	focus(NULL);
 }
@@ -2551,10 +2694,10 @@ unmanage(Client *c, int destroyed)
 		XSetErrorHandler(xerror);
 		XUngrabServer(dpy);
 	}
-	free(c);
 	focus(NULL);
 	updateclientlist();
-	arrange(m);
+	arrange_after_client_change(m, c, None);
+	free(c);
 }
 
 /* ---- properties ------------------------------------------------------ */
@@ -3457,6 +3600,7 @@ scan(void)
 	Window d1, d2, *wins = NULL;
 	XWindowAttributes wa;
 
+	scanning_clients = 1;
 	if (XQueryTree(dpy, root, &d1, &d2, &wins, &num)) {
 		for (i = 0; i < num; i++) {
 			if (wintoclient(wins[i]) || !XGetWindowAttributes(dpy, wins[i], &wa)
@@ -3475,6 +3619,7 @@ scan(void)
 		if (wins)
 			XFree(wins);
 	}
+	scanning_clients = 0;
 }
 
 void
@@ -3591,7 +3736,20 @@ applystyle(const Config *next)
 	if (strcmp(settings.gpu_device, next->gpu_device) || strcmp(settings.disk_device, next->disk_device) ||
 	    strcmp(settings.network_interface, next->network_interface))
 		system_next = 0;
+	if (!first && settings.tag_slide_duration && config_motion_enabled(&settings)) {
+		int stop = 0;
+		if (!next->tag_slide_duration || !config_motion_enabled(next))
+			stop = TagViews | TagTransfers;
+		else {
+			stop |= settings.tag_slide && !next->tag_slide ? TagViews : 0;
+			stop |= settings.window_tag_slide && !next->window_tag_slide ? TagTransfers : 0;
+		}
+		if (stop)
+			cancel_tag_slides(stop);
+	}
 	settings = *next;
+	if (!first)
+		publish_window_motion();
 	++theme_revision;
 	Atom config_serial = XInternAtom(dpy, "_MWM_CONFIG_SERIAL", False);
 	unsigned long serial = theme_revision;
@@ -3738,6 +3896,11 @@ setup(const RestartState *state)
 	mwmatom[MwmMsg] = XInternAtom(dpy, MWM_ATOM_MSG, False);
 	mwmatom[MwmCmd] = XInternAtom(dpy, MWM_ATOM_CMD, False);
 	mwmatom[MwmReply] = XInternAtom(dpy, MWM_ATOM_REPLY, False);
+	char slide_atom[48];
+	snprintf(slide_atom, sizeof slide_atom, "_MWM_TAG_SLIDE_V1_S%d", screen);
+	tag_slide_selection = XInternAtom(dpy, slide_atom, False);
+	window_motion_atom = XInternAtom(dpy, "_MWM_WINDOW_MOTION_V1", False);
+	publish_window_motion();
 
 	/* cursors */
 	cursor[CurNormal] = XCreateFontCursor(dpy, XC_left_ptr);
@@ -3789,6 +3952,7 @@ cleanup(void)
 	Monitor *m;
 
 	running = 0;
+	XDeleteProperty(dpy, root, window_motion_atom);
 	controls_reset(&controls);
 	shell_panel_close(&shell, &panel);
 	if (input_method)

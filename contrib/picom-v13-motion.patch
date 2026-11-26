@@ -1,0 +1,749 @@
+diff --git a/src/common.h b/src/common.h
+index eea2b2a..19273ec 100644
+--- a/src/common.h
++++ b/src/common.h
+@@ -128,6 +128,11 @@ typedef struct session {
+ 	region_t screen_reg;
+ 	/// Window ID of the window we register as a symbol.
+ 	xcb_window_t reg_win;
++	xcb_atom_t mwm_tag_slide_atom, mwm_window_motion_atom;
++	bool mwm_window_motion_active;
++	unsigned mwm_window_motion_mask;
++	struct win_script mwm_window_animations[3];
++	struct mwm_tag_slide *mwm_tag_slides;
+ 	/// Sync fence to sync draw operations
+ 	xcb_sync_fence_t sync_fence;
+ 	/// Whether we are rendering the first frame after screen is redirected
+diff --git a/src/event.c b/src/event.c
+index 2d0bced..078b747 100644
+--- a/src/event.c
++++ b/src/event.c
+@@ -19,6 +19,7 @@
+ #include "config.h"
+ #include "event.h"
+ #include "log.h"
++#include "mwm_tag_slide.h"
+ #include "picom.h"
+ #include "region.h"
+ #include "wm/defs.h"
+@@ -545,6 +546,10 @@ static inline void ev_property_notify(session_t *ps, xcb_property_notify_event_t
+ 	}
+ 
+ 	if (ps->c.screen_info->root == ev->window) {
++		if (ev->atom == ps->mwm_window_motion_atom) {
++			mwm_window_motion_update(ps);
++			return;
++		}
+ 		if (ps->o.use_ewmh_active_win && ps->atoms->a_NET_ACTIVE_WINDOW == ev->atom) {
+ 			ev_update_focused(ps);
+ 		} else {
+@@ -708,7 +713,12 @@ static inline void ev_shape_notify(session_t *ps, xcb_shape_notify_event_t *ev)
+ 
+ static inline void
+ ev_selection_clear(session_t *ps, xcb_selection_clear_event_t attr_unused *ev) {
+-	// The only selection we own is the _NET_WM_CM_Sn selection.
++	if (ev->selection == ps->mwm_tag_slide_atom) {
++		ps->mwm_tag_slide_atom = XCB_ATOM_NONE;
++		mwm_tag_slide_clear(ps);
++		return;
++	}
++	// We must retain the _NET_WM_CM_Sn selection.
+ 	// If we lose that one, we should exit.
+ 	log_fatal("Another composite manager started and took the _NET_WM_CM_Sn "
+ 	          "selection.");
+@@ -757,7 +767,11 @@ void ev_handle(session_t *ps, xcb_generic_event_t *ev) {
+ 	queue_redraw(ps);
+ 
+ 	// We intentionally ignore events sent via SendEvent. Those events has the 8th bit
+-	// of response_type set, meaning they will match none of the cases below.
++	// of response_type set. Allow only the compositor’s tag-slide protocol.
++	if (response_type == XCB_CLIENT_MESSAGE) {
++		mwm_tag_slide_event(ps, (xcb_client_message_event_t *)ev);
++		return;
++	}
+ 	switch (ev->response_type) {
+ 	case XCB_FOCUS_IN: ev_focus_in(ps, (xcb_focus_in_event_t *)ev); break;
+ 	case XCB_FOCUS_OUT: ev_focus_out(ps, (xcb_focus_out_event_t *)ev); break;
+diff --git a/src/meson.build b/src/meson.build
+index de3e001..5c73453 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -15,6 +15,7 @@ srcs = [
+ 		'event.c',
+ 		'inspect.c',
+ 		'log.c',
++		'mwm_tag_slide.c',
+ 		'options.c',
+ 		'picom.c',
+ 		'vblank.c',
+diff --git a/src/mwm_tag_slide.c b/src/mwm_tag_slide.c
+new file mode 100644
+index 0000000..3f16dcf
+--- /dev/null
++++ b/src/mwm_tag_slide.c
+@@ -0,0 +1,370 @@
++// SPDX-License-Identifier: MIT
++#include <libconfig.h>
++#include <limits.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include "atom.h"
++#include "backend/backend.h"
++#include "common.h"
++#include "log.h"
++#include "mwm_tag_slide.h"
++#include "transition/preset.h"
++#include "transition/script.h"
++#include "utils/misc.h"
++#include "wm/win.h"
++#include "wm/wm.h"
++
++enum {
++	MWM_TAG_BEGIN = 1,
++	MWM_TAG_WINDOW,
++	MWM_TAG_COMMIT,
++	MWM_TAG_CANCEL,
++	MWM_TILE_REFLOW,
++	MWM_TRANSFER_BEGIN,
++	MWM_TRANSFER_ACROSS_BEGIN
++};
++enum { MWM_TAG_VIEWS = 1, MWM_TAG_TRANSFERS = 2 };
++enum slide_kind { TAG_VIEW, WINDOW_TRANSFER, WINDOW_TRANSFER_ACROSS };
++// Encoding of the first argument to MWM_TAG_COMMIT.
++enum mwm_slide_easing { MWM_EASE_OUT = 0, MWM_EASE_IN_OUT, MWM_EASE_LINEAR };
++enum { MAX_SLIDE_WINDOWS = 4096, MAX_SLIDE_DURATION = 500, COMMIT_TIMEOUT = 250 };
++enum { MWM_ENTER = 1, MWM_EXIT = 2, MWM_REFLOW = 4 };
++
++struct tag_window {
++	xcb_window_t id;
++	ivec2 origin;
++	bool outgoing;
++};
++
++struct mwm_tag_slide {
++	struct mwm_tag_slide *next;
++	struct ibox monitor;
++	ivec2 destination, old_size;
++	struct tag_window *windows;
++	size_t count, capacity;
++	int direction, duration;
++	double progress;
++	enum slide_kind kind;
++	enum mwm_slide_easing easing;
++	int64_t requested, started;
++	bool committed;
++};
++
++static int64_t motion_now(void) {
++	struct timespec now = get_time_timespec();
++	return now.tv_sec * 1000LL + now.tv_nsec / 1000000;
++}
++
++static void mwm_window_motion_init(struct session *ps) {
++	static const char presets[] =
++	    "effects = ("
++	    "{ preset = \"appear\"; scale = 0.96; duration = 0.185; },"
++	    "{ preset = \"disappear\"; scale = 0.96; duration = 0.14; },"
++	    "{ preset = \"geometry-change\"; duration = 0.185; }"
++	    ");";
++	config_t config;
++	config_init(&config);
++	if (config_read_string(&config, presets)) {
++		config_setting_t *effects = config_lookup(&config, "effects");
++		for (unsigned i = 0; i < ARR_SIZE(ps->mwm_window_animations); i++) {
++			config_setting_t *preset = config_setting_get_elem(effects, i);
++			win_script_parse_preset(&ps->mwm_window_animations[i], preset);
++		}
++	}
++	config_destroy(&config);
++}
++
++void mwm_window_motion_free(struct session *ps) {
++	for (unsigned i = 0; i < ARR_SIZE(ps->mwm_window_animations); i++) {
++		if (ps->mwm_window_animations[i].script != NULL) {
++			script_free(ps->mwm_window_animations[i].script);
++		}
++	}
++}
++
++void mwm_window_motion_update(struct session *ps) {
++	winprop_t prop = x_get_prop(&ps->c, ps->c.screen_info->root,
++	                            ps->mwm_window_motion_atom, 1, XCB_ATOM_CARDINAL, 32);
++	ps->mwm_window_motion_active = prop.nitems == 1;
++	ps->mwm_window_motion_mask = ps->mwm_window_motion_active ? prop.c32[0] : 0;
++	free_winprop(&prop);
++}
++
++const struct win_script *
++mwm_window_motion_script(struct session *ps, struct win *w, enum animation_trigger trigger,
++                         unsigned *kind, const struct win_script *fallback) {
++	if (!ps->mwm_window_motion_active || !w->mwm_client) {
++		return fallback;
++	}
++	unsigned index;
++	switch (trigger) {
++	case ANIMATION_TRIGGER_OPEN:
++	case ANIMATION_TRIGGER_SHOW: index = 0; break;
++	case ANIMATION_TRIGGER_CLOSE:
++	case ANIMATION_TRIGGER_HIDE: index = 1; break;
++	case ANIMATION_TRIGGER_SIZE:
++	case ANIMATION_TRIGGER_POSITION:
++		if (w->mwm_reflow_until == 0 || motion_now() > w->mwm_reflow_until) {
++			return fallback;
++		}
++		w->mwm_reflow_until = 0;
++		index = 2;
++		break;
++	default: return fallback;
++	}
++
++	*kind = 1u << index;
++	return ps->mwm_window_motion_mask & *kind ? &ps->mwm_window_animations[index] : NULL;
++}
++
++void mwm_tag_slide_register(struct session *ps) {
++	const char *backend = backend_name(ps->o.backend);
++	if (!ps->o.vsync || (strcmp(backend, "glx") && strcmp(backend, "egl"))) {
++		return;
++	}
++	char name[48];
++	snprintf(name, sizeof(name), "_MWM_TAG_SLIDE_V1_S%d", ps->c.screen);
++	ps->mwm_tag_slide_atom = get_atom_with_nul(ps->atoms, name, ps->c.c);
++	if (ps->mwm_tag_slide_atom != XCB_ATOM_NONE) {
++		ps->mwm_window_motion_atom =
++		    get_atom_with_nul(ps->atoms, "_MWM_WINDOW_MOTION_V1", ps->c.c);
++		mwm_window_motion_init(ps);
++		mwm_window_motion_update(ps);
++		xcb_set_selection_owner(ps->c.c, ps->reg_win, ps->mwm_tag_slide_atom,
++		                        XCB_CURRENT_TIME);
++	}
++}
++
++static void remove_slide(struct mwm_tag_slide **slot) {
++	struct mwm_tag_slide *slide = *slot;
++	*slot = slide->next;
++	free(slide->windows);
++	free(slide);
++}
++
++void mwm_tag_slide_clear(struct session *ps) {
++	while (ps->mwm_tag_slides != NULL) {
++		remove_slide(&ps->mwm_tag_slides);
++	}
++}
++
++static void remove_monitor_slides(struct mwm_tag_slide **slot, ivec2 origin) {
++	while (*slot) {
++		struct mwm_tag_slide *slide = *slot;
++		if (ivec2_eq(slide->monitor.origin, origin) ||
++		    (slide->kind == WINDOW_TRANSFER_ACROSS && slide->committed &&
++		     ivec2_eq(slide->destination, origin))) {
++			remove_slide(slot);
++		} else {
++			slot = &slide->next;
++		}
++	}
++}
++
++static void begin_slide(struct session *ps, const uint32_t *data, enum slide_kind kind) {
++	if (ps->mwm_tag_slides && !ps->mwm_tag_slides->committed) {
++		remove_slide(&ps->mwm_tag_slides);
++	}
++	int x = (int32_t)data[1], y = (int32_t)data[2];
++	int width = (int)(data[3] >> 16), height = (int)(data[3] & 0xffff);
++	int duration = (int32_t)data[4];
++	if (!ps->redirected || width == 0 || height == 0 || x < 0 || y < 0 ||
++	    x > ps->root_width - width || y > ps->root_height - height ||
++	    duration < -MAX_SLIDE_DURATION || duration > MAX_SLIDE_DURATION || duration == 0) {
++		return;
++	}
++
++	// Replace an interrupted slide on this monitor. Others finish independently.
++	remove_monitor_slides(&ps->mwm_tag_slides, (ivec2){x, y});
++
++	struct mwm_tag_slide *slide = ccalloc(1, struct mwm_tag_slide);
++	*slide = (struct mwm_tag_slide){
++	    .next = ps->mwm_tag_slides,
++	    .monitor = {{x, y}, {width, height}},
++	    .kind = kind,
++	    .direction = duration > 0 ? 1 : -1,
++	    .duration = abs(duration),
++	    .requested = motion_now(),
++	};
++	ps->mwm_tag_slides = slide;
++}
++
++static int compare_window(const void *a, const void *b) {
++	xcb_window_t left = ((const struct tag_window *)a)->id;
++	xcb_window_t right = ((const struct tag_window *)b)->id;
++	return (left > right) - (left < right);
++}
++
++void mwm_tag_slide_event(struct session *ps, const xcb_client_message_event_t *event) {
++	if (ps->mwm_tag_slide_atom == XCB_ATOM_NONE || event->window != ps->reg_win ||
++	    event->type != ps->mwm_tag_slide_atom || event->format != 32) {
++		return;
++	}
++	const uint32_t *data = event->data.data32;
++	if (data[0] == MWM_TILE_REFLOW) {
++		if (ps->mwm_window_motion_mask & MWM_REFLOW) {
++			auto ref = wm_find(ps->wm, data[1]);
++			auto w = ref ? wm_ref_deref(ref) : NULL;
++			if (w != NULL && w->state == WSTATE_MAPPED) {
++				w->mwm_reflow_until = motion_now() + COMMIT_TIMEOUT;
++			}
++		}
++		return;
++	}
++	if (data[0] == MWM_TAG_CANCEL) {
++		for (struct mwm_tag_slide **slot = &ps->mwm_tag_slides; *slot;) {
++			unsigned kind = (*slot)->kind == TAG_VIEW ? MWM_TAG_VIEWS : MWM_TAG_TRANSFERS;
++			if (!data[1] || (data[1] & kind)) {
++				remove_slide(slot);
++			} else {
++				slot = &(*slot)->next;
++			}
++		}
++		return;
++	}
++	switch (data[0]) {
++	case MWM_TAG_BEGIN: begin_slide(ps, data, TAG_VIEW); return;
++	case MWM_TRANSFER_BEGIN: begin_slide(ps, data, WINDOW_TRANSFER); return;
++	case MWM_TRANSFER_ACROSS_BEGIN:
++		begin_slide(ps, data, WINDOW_TRANSFER_ACROSS);
++		return;
++	default: break;
++	}
++	struct mwm_tag_slide *slide = ps->mwm_tag_slides;
++	if (!slide || slide->committed) {
++		return;
++	}
++	if (data[0] == MWM_TAG_COMMIT) {
++		if (slide->count == 0) {
++			remove_slide(&ps->mwm_tag_slides);
++			return;
++		}
++		if (slide->kind == WINDOW_TRANSFER_ACROSS) {
++			slide->old_size = (ivec2){(int)(data[2] >> 16), (int)(data[2] & 0xffff)};
++			slide->destination = (ivec2){(int32_t)data[3], (int32_t)data[4]};
++			if (slide->old_size.width == 0 || slide->old_size.height == 0 ||
++			    slide->destination.x < 0 || slide->destination.x >= ps->root_width ||
++			    slide->destination.y < 0 || slide->destination.y >= ps->root_height) {
++				remove_slide(&ps->mwm_tag_slides);
++				return;
++			}
++			remove_monitor_slides(&slide->next, slide->destination);
++		}
++		qsort(slide->windows, slide->count, sizeof(*slide->windows), compare_window);
++		slide->easing = data[1] <= MWM_EASE_LINEAR ? (enum mwm_slide_easing)data[1]
++		                                           : MWM_EASE_OUT;
++		slide->committed = true;
++		log_debug("MWM %s at %d,%d, direction %d, duration %d ms",
++		          slide->kind == TAG_VIEW ? "tag slide" :
++		          slide->kind == WINDOW_TRANSFER_ACROSS ? "cross-monitor transfer" :
++		          "tag transfer",
++		          slide->monitor.origin.x, slide->monitor.origin.y,
++		          slide->direction, slide->duration);
++		return;
++	}
++	int x = (int32_t)data[3], y = (int32_t)data[4];
++	if (data[0] != MWM_TAG_WINDOW || data[1] == XCB_NONE || data[2] > 1 ||
++	    x < INT16_MIN || x > INT16_MAX || y < INT16_MIN || y > INT16_MAX ||
++	    slide->count == (slide->kind == TAG_VIEW ? MAX_SLIDE_WINDOWS : 1)) {
++		return;
++	}
++	if (slide->count == slide->capacity) {
++		slide->capacity = slide->capacity == 0 ? 8 : slide->capacity * 2;
++		slide->windows = crealloc(slide->windows, slide->capacity);
++	}
++	slide->windows[slide->count++] = (struct tag_window){data[1], {x, y}, data[2] != 0};
++}
++
++static double eased_progress(enum mwm_slide_easing easing, double t) {
++	switch (easing) {
++	case MWM_EASE_LINEAR: return t;
++	case MWM_EASE_IN_OUT: return t * t * (3.0 - 2.0 * t);
++	case MWM_EASE_OUT: {
++		double remaining = 1.0 - t;
++		return 1.0 - remaining * remaining * remaining;
++	}
++	}
++	return t;
++}
++
++bool mwm_tag_slide_frame(struct session *ps, int64_t now) {
++	for (struct mwm_tag_slide **slot = &ps->mwm_tag_slides; *slot;) {
++		struct mwm_tag_slide *slide = *slot;
++		if (slide->committed && slide->started == 0) {
++			slide->started = now;
++		}
++		if (slide->committed ? now - slide->started >= slide->duration
++		                     : now - slide->requested >= COMMIT_TIMEOUT) {
++			remove_slide(slot);
++			continue;
++		}
++		if (slide->committed) {
++			double t = (double)(now - slide->started) / slide->duration;
++			slide->progress = eased_progress(slide->easing, t);
++		}
++		slot = &slide->next;
++	}
++	return ps->mwm_tag_slides != NULL;
++}
++
++static struct mwm_tag_placement place_window(const struct mwm_tag_slide *slide,
++                                             const struct tag_window *window,
++                                             struct ibox bounds) {
++	struct mwm_tag_placement placement = {
++	    .origin = window->outgoing ? window->origin : bounds.origin,
++	    .clip = slide->monitor,
++	    .scale = {1.0, 1.0},
++	};
++	double p = slide->progress;
++	if (slide->kind == WINDOW_TRANSFER_ACROSS) {
++		placement.origin.x = (int)lround(window->origin.x * (1.0 - p) + bounds.origin.x * p);
++		placement.origin.y = (int)lround(window->origin.y * (1.0 - p) + bounds.origin.y * p);
++		placement.clip = (struct ibox){.size = {INT_MAX, INT_MAX}};
++		if (slide->committed) {
++			placement.scale.x = p + (double)slide->old_size.width / bounds.size.width * (1.0 - p);
++			placement.scale.y = p + (double)slide->old_size.height / bounds.size.height * (1.0 - p);
++		}
++		return placement;
++	}
++
++	int distance = slide->direction * slide->monitor.size.width;
++	int dx = (int)lround(distance * (window->outgoing ? p : p - 1.0));
++	if (slide->kind == TAG_VIEW) {
++		dx = -dx;
++		// Keep the two tags on their own sides of the moving seam.
++		placement.clip.origin.x += max2(dx, 0);
++		placement.clip.size.width -= abs(dx);
++	}
++	placement.origin.x += dx;
++	return placement;
++}
++
++bool mwm_tag_slide_place(const struct mwm_tag_slide *slides, xcb_window_t win,
++                         struct ibox bounds, struct mwm_tag_placement *placement) {
++	for (const struct mwm_tag_slide *slide = slides; slide; slide = slide->next) {
++		const struct tag_window *window = NULL;
++		if (slide->committed) {
++			struct tag_window key = {.id = win};
++			window = bsearch(&key, slide->windows, slide->count,
++			                 sizeof(*slide->windows), compare_window);
++		} else {
++			for (size_t i = 0; i < slide->count; ++i) {
++				if (slide->windows[i].id == win) {
++					window = &slide->windows[i];
++					break;
++				}
++			}
++		}
++		if (!window) {
++			continue;
++		}
++		if (placement) {
++			*placement = place_window(slide, window, bounds);
++		}
++		return true;
++	}
++	return false;
++}
+diff --git a/src/mwm_tag_slide.h b/src/mwm_tag_slide.h
+new file mode 100644
+index 0000000..3153ee3
+--- /dev/null
++++ b/src/mwm_tag_slide.h
+@@ -0,0 +1,33 @@
++// SPDX-License-Identifier: MIT
++#pragma once
++
++#include <stdbool.h>
++#include <stdint.h>
++#include <xcb/xproto.h>
++
++#include <picom/types.h>
++
++#include "config.h"
++
++struct session;
++struct mwm_tag_slide;
++struct win;
++
++struct mwm_tag_placement {
++	ivec2 origin;
++	struct ibox clip;
++	vec2 scale;
++};
++
++void mwm_tag_slide_register(struct session *ps);
++void mwm_tag_slide_event(struct session *ps, const xcb_client_message_event_t *event);
++void mwm_tag_slide_clear(struct session *ps);
++bool mwm_tag_slide_frame(struct session *ps, int64_t now);
++bool mwm_tag_slide_place(const struct mwm_tag_slide *slides, xcb_window_t win,
++                         struct ibox bounds, struct mwm_tag_placement *placement);
++
++void mwm_window_motion_update(struct session *ps);
++void mwm_window_motion_free(struct session *ps);
++const struct win_script *
++mwm_window_motion_script(struct session *ps, struct win *w, enum animation_trigger trigger,
++                         unsigned *kind, const struct win_script *fallback);
+diff --git a/src/picom.c b/src/picom.c
+index 71a77b1..d2f6841 100644
+--- a/src/picom.c
++++ b/src/picom.c
+@@ -52,6 +52,7 @@
+ #include "event.h"
+ #include "inspect.h"
+ #include "log.h"
++#include "mwm_tag_slide.h"
+ #include "options.h"
+ #include "picom.h"
+ #include "region.h"
+@@ -605,6 +606,9 @@ void configure_root(session_t *ps) {
+ 		abort();
+ 	}
+ 
++	if (r->width != ps->root_width || r->height != ps->root_height) {
++		mwm_tag_slide_clear(ps);
++	}
+ 	log_info("Root configuration changed, new geometry: %dx%d", r->width, r->height);
+ 	if (ps->redirected) {
+ 		// On root window changes
+@@ -827,6 +831,9 @@ static bool paint_preprocess(session_t *ps, bool *animation, struct win **out_bo
+ 		// (might not be the best naming.)
+ 		unredir_possible = true;
+ 	}
++	if (ps->mwm_tag_slides != NULL && ps->o.redirected_force == UNSET) {
++		unredir_possible = false;
++	}
+ 	if (unredir_possible) {
+ 		if (ps->redirected) {
+ 			if (!ps->o.unredir_if_possible_delay || ps->tmout_unredir_hit) {
+@@ -1033,6 +1040,9 @@ static int register_cm(session_t *ps) {
+ 		}
+ 		free(reply);
+ 		xcb_set_selection_owner(ps->c.c, ps->reg_win, atom, 0);
++		if (!ps->o.print_diagnostics) {
++			mwm_tag_slide_register(ps);
++		}
+ 	}
+ 
+ 	return 0;
+@@ -1649,6 +1659,7 @@ static void draw_callback_impl(EV_P_ session_t *ps, int revents attr_unused) {
+ 	 * screen is not redirected. its sole purpose should be to decide whether the
+ 	 * screen should be redirected. */
+ 	bool animation = false;
++	bool tag_slide = mwm_tag_slide_frame(ps, now_ms);
+ 	bool was_redirected = ps->redirected;
+ 	struct win *bottom = NULL;
+ 	if (!paint_preprocess(ps, &animation, &bottom)) {
+@@ -1716,7 +1727,7 @@ static void draw_callback_impl(EV_P_ session_t *ps, int revents attr_unused) {
+ 			return;
+ 		}
+ 		layout_manager_append_layout(
+-		    ps->layout_manager, ps->wm, ps->root_image_generation,
++		    ps->layout_manager, ps->wm, ps->mwm_tag_slides, ps->root_image_generation,
+ 		    (ivec2){.width = ps->root_width, .height = ps->root_height});
+ 		bool succeeded = renderer_render(
+ 		    ps->renderer, ps->backend_data, ps->root_image, &ps->root_image_extent,
+@@ -1767,7 +1778,7 @@ static void draw_callback_impl(EV_P_ session_t *ps, int revents attr_unused) {
+ 
+ 	// Queue redraw if animation is running. This should be picked up by next present
+ 	// event.
+-	if (animation) {
++	if (animation || tag_slide) {
+ 		queue_redraw(ps);
+ 	} else {
+ 		ps->fade_time = 0L;
+@@ -2355,6 +2366,8 @@ err:
+  * @param ps session to destroy
+  */
+ static void session_destroy(session_t *ps) {
++	mwm_tag_slide_clear(ps);
++	mwm_window_motion_free(ps);
+ 	if (ps->redirected) {
+ 		unredirect(ps);
+ 	}
+diff --git a/src/renderer/layout.c b/src/renderer/layout.c
+index 9efce9e..bdf20c2 100644
+--- a/src/renderer/layout.c
++++ b/src/renderer/layout.c
+@@ -8,6 +8,7 @@
+ 
+ #include "command_builder.h"
+ #include "common.h"
++#include "mwm_tag_slide.h"
+ #include "region.h"
+ #include "utils/dynarr.h"
+ #include "utils/list.h"
+@@ -40,7 +41,8 @@ struct layout_manager {
+ 
+ /// Compute layout of a layer from a window. Returns false if the window is not
+ /// visible / should not be rendered. `out_layer` is modified either way.
+-static bool layer_from_window(struct layer *out_layer, struct win *w, ivec2 size) {
++static bool layer_from_window(struct layer *out_layer, struct win *w, ivec2 size,
++                              const struct mwm_tag_slide *slides) {
+ 	bool to_paint = false;
+ 	auto w_opts = win_options(w);
+ 	if (!w->ever_damaged || !w_opts.paint) {
+@@ -91,6 +93,19 @@ static bool layer_from_window(struct layer *out_layer, struct win *w, ivec2 size
+ 		out_layer->shadow_scale = SCALE_IDENTITY;
+ 	}
+ 
++	struct mwm_tag_placement placement;
++	if (mwm_tag_slide_place(slides, win_id(w),
++	                        (struct ibox){{w->g.x, w->g.y}, out_layer->window.size},
++	                        &placement)) {
++		out_layer->crop = placement.clip;
++		out_layer->scale = placement.scale;
++		out_layer->shadow_scale = placement.scale;
++		out_layer->window.origin = placement.origin;
++		out_layer->shadow.origin = ivec2_add(
++		    placement.origin, ivec2_scale_floor((ivec2){w->shadow_dx, w->shadow_dy},
++		                                         placement.scale));
++	}
++
+ 	struct ibox window_scaled = {
+ 	    .origin = out_layer->window.origin,
+ 	    .size = ivec2_scale_floor(out_layer->window.size, out_layer->scale),
+@@ -208,6 +223,7 @@ void layout_manager_free(struct layout_manager *lm) {
+ //   above.
+ 
+ void layout_manager_append_layout(struct layout_manager *lm, struct wm *wm,
++                                  const struct mwm_tag_slide *slides,
+                                   uint64_t root_pixmap_generation, ivec2 size) {
+ 	auto prev_layout = &lm->layouts[lm->current];
+ 	lm->current = (lm->current + 1) % lm->max_buffer_age;
+@@ -224,7 +240,7 @@ void layout_manager_append_layout(struct layout_manager *lm, struct wm *wm,
+ 			continue;
+ 		}
+ 		dynarr_resize(layout->layers, rank + 1, layer_init, layer_deinit);
+-		if (!layer_from_window(&layout->layers[rank], (struct win *)w, size)) {
++		if (!layer_from_window(&layout->layers[rank], (struct win *)w, size, slides)) {
+ 			continue;
+ 		}
+ 
+diff --git a/src/renderer/layout.h b/src/renderer/layout.h
+index 9cde4ec..8bf3cae 100644
+--- a/src/renderer/layout.h
++++ b/src/renderer/layout.h
+@@ -79,12 +79,14 @@ struct layout {
+ 
+ struct wm;
+ struct layout_manager;
++struct mwm_tag_slide;
+ 
+ /// Compute the layout of windows to be rendered in the current frame, and append it to
+ /// the end of layout manager's ring buffer.  The layout manager has a ring buffer of
+ /// layouts, with its size chosen at creation time. Calling this will push at new layout
+ /// at the end of the ring buffer, and remove the oldest layout if the buffer is full.
+ void layout_manager_append_layout(struct layout_manager *lm, struct wm *wm,
++                                  const struct mwm_tag_slide *slides,
+                                   uint64_t root_pixmap_generation, ivec2 size);
+ /// Get the layout `age` frames into the past. Age `0` is the most recently appended
+ /// layout.
+diff --git a/src/wm/win.c b/src/wm/win.c
+index f022838..021f8ed 100644
+--- a/src/wm/win.c
++++ b/src/wm/win.c
+@@ -26,6 +26,7 @@
+ #include "dbus.h"
+ #include "inspect.h"
+ #include "log.h"
++#include "mwm_tag_slide.h"
+ #include "picom.h"
+ #include "region.h"
+ #include "utils/console.h"
+@@ -1707,6 +1708,9 @@ bool win_process_animation_and_state_change(struct session *ps, struct win *w, d
+ 	bool position_changed = win_position_changed(w->previous.g, w->g);
+ 
+ 	auto old_state = w->previous.state;
++	if (w->state == WSTATE_MAPPED) {
++		w->mwm_client = !w->a.override_redirect && win_client_id(w, false) == win_id(w);
++	}
+ 
+ 	w->previous.state = w->state;
+ 	w->previous.opacity = w->opacity;
+@@ -1722,6 +1726,13 @@ bool win_process_animation_and_state_change(struct session *ps, struct win *w, d
+ 		return state_changed || (w->running_animation_instance != NULL);
+ 	}
+ 
++	// A tag slide owns geometry changes for its participating mapped windows.
++	if (old_state == WSTATE_MAPPED && w->state == WSTATE_MAPPED &&
++	    (size_changed || position_changed) &&
++	    mwm_tag_slide_place(ps->mwm_tag_slides, win_id(w), (struct ibox){0}, NULL)) {
++		return true;
++	}
++
+ 	// Try to determine the right animation trigger based on state changes. Note there
+ 	// is some complications here. X automatically unmaps windows before destroying
+ 	// them. So a "close" trigger will also be fired from a UNMAPPED -> DESTROYED
+@@ -1798,6 +1809,13 @@ bool win_process_animation_and_state_change(struct session *ps, struct win *w, d
+ 		trigger = ANIMATION_TRIGGER_COLOR;
+ 	}
+ 
++	if (w->mwm_motion_running && w->running_animation_instance == NULL) {
++		w->mwm_motion_running = 0;
++	}
++	if (w->mwm_motion_running && trigger == ANIMATION_TRIGGER_INVALID &&
++	    !(ps->mwm_window_motion_mask & w->mwm_motion_running)) {
++		return true;
++	}
+ 	if (trigger == ANIMATION_TRIGGER_INVALID) {
+ 		// No state changes, if there's a animation running, we just continue it.
+ 		return win_advance_animation(w, delta_t, &win_ctx);
+@@ -1819,11 +1837,14 @@ bool win_process_animation_and_state_change(struct session *ps, struct win *w, d
+ 	}
+ 
+ 	auto wopts = win_options(w);
+-	if (wopts.animations[trigger].script == NULL) {
++	unsigned motion = 0;
++	const struct win_script *animation =
++	    mwm_window_motion_script(ps, w, trigger, &motion, &wopts.animations[trigger]);
++	if (animation == NULL || animation->script == NULL) {
+ 		return true;
+ 	}
+ 
+-	if (wopts.animations[trigger].is_generated && !wopts.fade) {
++	if (animation->is_generated && !wopts.fade) {
+ 		// Window's animation is fading (as signified by the fact that it's
+ 		// generated), but the user has disabled fading for this window.
+ 		return true;
+@@ -1867,7 +1888,7 @@ bool win_process_animation_and_state_change(struct session *ps, struct win *w, d
+ 		};
+ 	}
+ 
+-	auto new_animation = script_instance_new(wopts.animations[trigger].script);
++	auto new_animation = script_instance_new(animation->script);
+ 	if (w->running_animation_instance) {
+ 		// Interrupt the old animation and start the new animation from where the
+ 		// old has left off. Note we still need to advance the old animation for
+@@ -1920,7 +1941,8 @@ bool win_process_animation_and_state_change(struct session *ps, struct win *w, d
+ 		free(w->running_animation_instance);
+ 	}
+ 	w->running_animation_instance = new_animation;
+-	w->running_animation = wopts.animations[trigger];
++	w->running_animation = *animation;
++	w->mwm_motion_running = motion;
+ 	script_instance_evaluate(w->running_animation_instance, &win_ctx, true);
+ 	return script_instance_is_finished(w->running_animation_instance);
+ }
+diff --git a/src/wm/win.h b/src/wm/win.h
+index 64214b8..d579a88 100644
+--- a/src/wm/win.h
++++ b/src/wm/win.h
+@@ -146,6 +146,10 @@ struct win {
+ 	bool to_paint;
+ 	/// Whether this window is in open/close state.
+ 	bool in_openclose;
++	// Remember the ICCCM client across unmap and destruction.
++	bool mwm_client;
++	unsigned mwm_motion_running;
++	int64_t mwm_reflow_until;
+ 
+ 	// Client window related members
+ 	/// A bitflag of window types. According to ICCCM, a window can have more than one

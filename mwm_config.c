@@ -51,8 +51,10 @@ config_defaults(Config *c)
 		.display_visibility = DisplaysExternal, .display_quick_presets = DisplayRow | DisplayColumn | DisplayTwoAbove,
 		.display_saved_presets = 1, .display_mirror = 1, .display_identify = 1, .undocked_command = "undocked",
 		.panelradius = 6, .panel_opacity = 255, .calendar_width = 394, .clock_width = 448, .palette_width = 530,
-		.duration = 150, .shadows = 1, .shadow_opacity = 112, .bar_shadow_blur = 2, .panel_shadow_blur = 6,
+		.animations = 1, .duration = 150, .shadows = 1, .shadow_opacity = 112, .bar_shadow_blur = 2, .panel_shadow_blur = 6,
 		.popup_enter = 145, .popup_exit = 100, .popup_distance = 14,
+		.tag_slide = 1, .tag_slide_duration = 195, .tag_slide_easing = TagSlideEaseOut,
+		.window_enter = 1, .window_exit = 1, .window_reflow = 1, .window_tag_slide = 1,
 		.font = "Geist:pixelsize=18", .monofont = "Geist Mono",
 		.colors = {
 			[SchemeNorm]   = {"#c0caf5", "#1a1b26", "#3b4261"},
@@ -152,9 +154,16 @@ static const Setting settings[] = {
 	INT("panels", "calendar_width", calendar_width, 300, 900),
 	INT("panels", "clock_width", clock_width, 340, 900),
 	INT("panels", "palette_width", palette_width, 360, 900),
+	INT("motion", "animations", animations, 0, 1),
 	INT("motion", "duration", duration, 0, 500), INT("motion", "reduced_motion", reduced_motion, 0, 1),
 	INT("motion", "popup_enter", popup_enter, 0, 500), INT("motion", "popup_exit", popup_exit, 0, 500),
 	INT("motion", "popup_distance", popup_distance, 0, 48),
+	INT("motion", "tag_slide", tag_slide, 0, 1),
+	INT("motion", "tag_slide_duration", tag_slide_duration, 0, 500),
+	INT("motion", "window_enter", window_enter, 0, 1),
+	INT("motion", "window_exit", window_exit, 0, 1),
+	INT("motion", "window_reflow", window_reflow, 0, 1),
+	INT("motion", "window_tag_slide", window_tag_slide, 0, 1),
 	INT("motion", "shadows", shadows, 0, 1),
 	INT("motion", "shadow_opacity", shadow_opacity, 0, 255),
 	INT("motion", "bar_shadow_blur", bar_shadow_blur, 1, 5),
@@ -492,6 +501,17 @@ read_value(Config *c, const char *section, const char *key, char *v, Rule *rule)
 	}
 	if (!strcmp(section, "tag_monitors") && integer(key, 1, MAX_TAGS, &id))
 		return integer(v, -1, 99, &c->tagmon[id - 1]);
+	if (!strcmp(section, "motion") && !strcmp(key, "tag_slide_easing")) {
+		static const char *const names[] = {
+			[TagSlideEaseOut] = "ease-out", [TagSlideEaseInOut] = "ease-in-out", [TagSlideLinear] = "linear",
+		};
+		for (size_t i = 0; i < COUNT(names); ++i)
+			if (!strcmp(v, names[i])) {
+				c->tag_slide_easing = (enum TagSlideEasing)i;
+				return 1;
+			}
+		return 0;
+	}
 	if (!strcmp(section, "clock") && !strcmp(key, "in_presets"))
 		return read_presets(c, v);
 	if (!strcmp(section, "timezones")) {

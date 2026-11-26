@@ -44,6 +44,8 @@ Geist and Geist Mono with an Xresources palette and a Runware-generated Alpine w
   compositor* (turn off if your compositor already rounds corners).
 - **CUI bar and panels** with Geist and Geist Mono, rounded segments, animated
   tag selection, a monthly calendar, world clocks and a timer.
+- **GPU-composited motion** for tag switches, window transfers, and tiled
+  layout changes with the optional Picom patch.
 - **XEmbed system tray** styled alongside the other segments.
 - **Wi-Fi and Bluetooth tray applets** with CUI panels, live device status,
   Wi-Fi and VPN credentials, and Bluetooth pairing prompts.
@@ -103,6 +105,7 @@ and standard utilities including `awk`, `sha256sum`, and `mktemp`.
 | Brightness | A Linux backlight device. Changing brightness needs `brightnessctl` and permission to control the device. |
 | Battery and activity charts | Linux `/proc` and `/sys`. Battery and GPU readings depend on the counters exposed by your hardware and drivers. |
 | Bar and popup transparency and shadows | An X11 compositor such as picom. |
+| Window and tag animations | [Patched Picom v13](#window-and-tag-animations) with a GL backend and vsync. |
 
 ## Build from source
 
@@ -313,6 +316,53 @@ Individual segments can also slide open and closed. Adjust timing with
 Popups slide in and out using `popup_enter`, `popup_exit` (milliseconds),
 and `popup_distance` (pixels) in the same section.
 Set `separators = true` under `[bar]` to draw lines between items in a segment.
+
+### Window and tag animations
+
+Under `[motion]`, `animations = false` or `reduced_motion = true` makes
+MWM's animations immediate, including bar and popup transitions.
+Apply changes with `mwmc reload`.
+
+Tag changes slide horizontally on the monitor that changes tags. The previous
+and next commands retain their direction when wrapping. MWM updates focus and
+window geometry immediately. Picom moves the window textures and their shadows
+while the bar, wallpaper, and sticky windows stay in place.
+
+Under `[motion]`, `tag_slide = true` enables the effect and
+`tag_slide_duration = 195` sets its duration in milliseconds (0–500).
+`tag_slide_easing = ease-out` starts quickly and slows into place.
+Use `ease-in-out` for a gentler start or `linear` for constant speed.
+Set `tag_slide = false` for instant tag switches.
+
+With `window_tag_slide = true`, sending a window to a hidden tag with
+`mwmc move win next|prev|<tag>` or `mwmc win tag <tag>` slides it toward
+that tag. If the destination tag is visible on another monitor, the window
+slides to its new position there. Transfers use the same duration and easing
+as tag switches. Set the duration to zero to make both immediate. Dragging
+a window between monitors follows the pointer.
+
+Application windows scale and fade in over 185 ms and out over 140 ms. A visible
+tiled window opening, closing, or moving between tags makes neighboring tiles
+grow or shrink over 185 ms. Set `window_enter`, `window_exit`, `window_reflow`,
+or `window_tag_slide` to `false` to disable that effect.
+
+Window and tag effects require Picom v13 with the [motion patch](contrib/picom-v13-motion.patch),
+`backend = "glx";` (or `"egl"`) and `vsync = true;` in Picom's config.
+Tag and window changes are immediate when the compositor is unavailable or bypassed.
+From the MWM source directory, build the optional compositor with Picom's build
+dependencies installed.
+
+```sh
+git clone --branch v13 https://github.com/yshui/picom.git /tmp/picom-mwm
+git -C /tmp/picom-mwm apply "$PWD/contrib/picom-v13-motion.patch"
+meson setup /tmp/picom-mwm/build /tmp/picom-mwm -Dbuildtype=release -Dwith_docs=false -Dunittest=false
+meson compile -C /tmp/picom-mwm/build
+install -Dm755 /tmp/picom-mwm/build/src/picom ~/.local/bin/picom-mwm
+```
+
+Start `picom-mwm` in place of `picom` in your X startup script. It reads your
+existing Picom config. Rebuild it from the updated patch when upgrading from
+an earlier animation test build.
 
 ### Wi-Fi and Bluetooth
 

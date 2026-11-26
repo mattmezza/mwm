@@ -1,5 +1,5 @@
 # mwm version
-VERSION = 0.6.1
+VERSION = 0.7.0
 
 PREFIX    = /usr/local
 MANPREFIX = $(PREFIX)/share/man

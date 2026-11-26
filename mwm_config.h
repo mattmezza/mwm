@@ -11,6 +11,8 @@ enum { SYSTEM_INTERVAL_MIN = 125, SYSTEM_INTERVAL_MAX = 5000 };
 enum { UsageWarning, UsageDanger, UsageColorCount };
 enum { DisplaysExternal, DisplaysAlways, DisplaysNever };
 enum { DisplayRow = 1, DisplayColumn = 2, DisplayTwoAbove = 4 };
+/* Values also used by the Picom tag slide protocol. */
+enum TagSlideEasing { TagSlideEaseOut = 0, TagSlideEaseInOut, TagSlideLinear };
 enum { SchemeNorm, SchemeSel, SchemeUrg, SchemeTitle, SchemeStatus, SchemeBar, SchemeLast };
 enum { ColFg, ColBg, ColBorder };
 enum BarItem { BarTags, BarLayout, BarTitle, BarStatus, BarCpu, BarGpu, BarRam, BarLoad, BarNetwork, BarDisk, BarDate, BarTime,
@@ -57,8 +59,11 @@ typedef struct {
 	int display_visibility, display_quick_presets, display_saved_presets, display_mirror, display_identify;
 	char undocked_command[512];
 	int panelradius, panel_opacity, calendar_width, clock_width, palette_width;
-	int duration, reduced_motion, shadows, shadow_opacity, bar_shadow_blur, panel_shadow_blur;
+	int animations, duration, reduced_motion, shadows, shadow_opacity, bar_shadow_blur, panel_shadow_blur;
 	int popup_enter, popup_exit, popup_distance;
+	int tag_slide, tag_slide_duration;
+	enum TagSlideEasing tag_slide_easing;
+	int window_enter, window_exit, window_reflow, window_tag_slide;
 	char font[128], monofont[128];
 	char colors[SchemeLast][3][64];
 	int alpha[SchemeLast];
@@ -76,6 +81,12 @@ typedef struct {
 	int in_presets[MAX_TIMER_PRESETS], nin_presets, at_presets, blink_separator;
 	char hook[512];
 } Config;
+
+static inline int
+config_motion_enabled(const Config *config)
+{
+	return config->animations && !config->reduced_motion;
+}
 
 void config_defaults(Config *config);
 int config_default_path(char *path, size_t length);

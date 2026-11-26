@@ -382,7 +382,7 @@ shell_popup_padding(const ShellHost *host, const Config *config)
 static int
 popup_duration(const Config *c, int duration)
 {
-	return c->reduced_motion || !c->duration || !c->popup_distance ? 0 : duration;
+	return !config_motion_enabled(c) || !c->duration || !c->popup_distance ? 0 : duration;
 }
 
 int
@@ -1384,7 +1384,7 @@ shell_bar_draw(const ShellHost *host, const ShellFont *font, unsigned revision,
 	    || !shell_surface_begin(host, font, revision, &bar->surface, window, w, h, fmin(elapsed, 0.1)))
 		return 0;
 
-	int duration = c->reduced_motion ? 0 : c->duration;
+	int duration = config_motion_enabled(c) ? c->duration : 0;
 	bar->animating = 0;
 	if (m->status[0])
 		snprintf(bar->status, sizeof bar->status, "%s", m->status);
@@ -1399,7 +1399,7 @@ shell_bar_draw(const ShellHost *host, const ShellFont *font, unsigned revision,
 	float fade = duration ? fminf(1, (tick - bar->hover_since) * 1000 / duration) : 1;
 	Frame f = {bar->surface.ui, font, c, bar->hits, 0, COUNT(bar->hits),
 	           bar->hover_x, bar->hover_y, host->composited, fade, font->bar_size, {0, 0, 0, 0}};
-	cui_set_reduced_motion(f.ui, c->reduced_motion != 0);
+	cui_set_reduced_motion(f.ui, !config_motion_enabled(c));
 	memset(bar->metrics, 0, sizeof bar->metrics);
 	bar->tray_clip_width = 0;
 	cui_rect shapes[MAX_BAR_SEGMENTS];
@@ -2331,7 +2331,7 @@ shell_panel_draw(const ShellHost *host, const ShellFont *font, unsigned revision
 		return 0;
 	Frame f = {p->surface.ui, font, c, p->hits, 0, COUNT(p->hits),
 	           p->hover_x, p->hover_y, host->composited, 1, font->size, {0, 0, 0, 0}};
-	cui_set_reduced_motion(f.ui, c->reduced_motion != 0);
+	cui_set_reduced_motion(f.ui, !config_motion_enabled(c));
 	cui_color fg = c->palette[SchemeStatus][ColFg], bg = alpha(c->palette[SchemeStatus][ColBg], 255);
 	cui_color accent = alpha(c->palette[SchemeSel][ColBg], 255), ink = c->palette[SchemeSel][ColFg];
 	cui_color card = blend(bg, fg, 0.10f), muted = blend(bg, fg, 0.64f);
