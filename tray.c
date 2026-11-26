@@ -3,6 +3,7 @@
 
 #include <X11/Xatom.h>
 #include <X11/Xutil.h>
+#include <X11/cursorfont.h>
 #include <X11/keysym.h>
 #include <X11/extensions/shape.h>
 #include <X11/extensions/Xrender.h>
@@ -122,10 +123,12 @@ make_icon(Tray *tray)
 	XSetWindowAttributes attrs = {
 		.override_redirect = True, .background_pixel = 0, .border_pixel = 0, .colormap = h->cmap,
 		.event_mask = ExposureMask | ButtonPressMask | EnterWindowMask | LeaveWindowMask | StructureNotifyMask,
+		.cursor = win->cursors[TrayCursorHand],
 	};
 	win->icon_w = win->icon_h = 24;
 	win->icon = XCreateWindow(h->dpy, h->root, 0, 0, 24, 24, 0, h->depth, InputOutput, h->visual,
-	                          CWOverrideRedirect | CWBackPixel | CWBorderPixel | CWColormap | CWEventMask, &attrs);
+	                          CWOverrideRedirect | CWBackPixel | CWBorderPixel | CWColormap | CWEventMask | CWCursor,
+	                          &attrs);
 	set_class(h->dpy, win->icon, applets[tray->kind].icon_class, win->title);
 	unsigned long embed[] = {0, 1}; /* Version 0, XEMBED_MAPPED. */
 	XChangeProperty(h->dpy, win->icon, win->embed_info, win->embed_info, 32,
@@ -282,6 +285,17 @@ focus_field(Tray *tray, int field)
 	w->select_all = w->paste_pending = FALSE;
 }
 
+static const TrayHit *
+tray_hit(const TrayWindow *w, int x, int y)
+{
+	for (int i = w->count-1; i >= 0; --i) {
+		cui_rect r = w->hits[i].rect;
+		if (x >= r.x && x < r.x+r.w && y >= r.y && y < r.y+r.h)
+			return &w->hits[i];
+	}
+	return NULL;
+}
+
 static gboolean
 redraw(gpointer data)
 {
@@ -303,6 +317,13 @@ redraw(gpointer data)
 			XMoveResizeWindow(w->host.dpy, w->panel, w->x, w->y+w->offset_y,
 			                  w->width+2*w->pad, w->height+2*w->pad);
 		tray_ui_panel(tray);
+		const TrayHit *hit = tray_hit(w, w->hover_x, w->hover_y);
+		enum TrayCursor style = !hit ? TrayCursorNormal : hit->kind == HitField ? TrayCursorText : TrayCursorHand;
+		if (w->pointer != style) {
+			XChangeActivePointerGrab(w->host.dpy, ButtonPressMask | PointerMotionMask,
+			                         w->cursors[style], CurrentTime);
+			w->pointer = style;
+		}
 	}
 	tray_ui_icon(tray);
 	XFlush(w->host.dpy);
@@ -351,6 +372,7 @@ tray_popup(Tray *tray)
 	}
 	v->opened = shell_seconds();
 	v->hover_x = v->hover_y = v->selected = -1;
+	v->pointer = TrayCursorNormal;
 	g_clear_pointer(&v->expanded, g_free);
 	size_panel(tray);
 	XSetWindowAttributes attrs = {
@@ -363,7 +385,7 @@ tray_popup(Tray *tray)
 	set_class(h->dpy, v->panel, "mwm-panel", applets[tray->kind].panel_title);
 	XMapRaised(h->dpy, v->panel);
 	int pointer = XGrabPointer(h->dpy, v->panel, False, ButtonPressMask | PointerMotionMask,
-	                           GrabModeAsync, GrabModeAsync, None, None, CurrentTime);
+	                           GrabModeAsync, GrabModeAsync, None, v->cursors[v->pointer], CurrentTime);
 	int keyboard = XGrabKeyboard(h->dpy, v->panel, False, GrabModeAsync, GrabModeAsync, CurrentTime);
 	if (pointer != GrabSuccess || keyboard != GrabSuccess) {
 		XDestroyWindow(h->dpy, v->panel);
@@ -624,8 +646,18 @@ panel_click(Tray *tray, XButtonEvent *event)
 	TrayWindow *w = tray->window;
 	int x = event->x, y = event->y;
 	if (x < w->pad || x >= w->pad+w->width || y < w->pad || y >= w->pad+w->height) {
+		int toggle = FALSE;
+		if (event->button == Button3 && tray->kind != TrayDisplays && w->icon) {
+			int ix, iy;
+			Window child;
+			toggle = XTranslateCoordinates(w->host.dpy, w->host.root, w->icon,
+			                               event->x_root, event->y_root, &ix, &iy, &child) &&
+			         ix >= 0 && ix < w->icon_w && iy >= 0 && iy < w->icon_h;
+		}
 		if (event->button == Button1 || event->button == Button3)
 			close_panel(tray, FALSE);
+		if (toggle)
+			tray_action(tray, TrayToggle, NULL);
 		return;
 	}
 	if (event->button == Button4 || event->button == Button5) {
@@ -641,11 +673,9 @@ panel_click(Tray *tray, XButtonEvent *event)
 		tray_changed(tray);
 		return;
 	}
-	for (int i = w->count-1; i >= 0; --i) {
-		TrayHit hit = w->hits[i];
-		cui_rect r = hit.rect;
-		if (x < r.x || x >= r.x+r.w || y < r.y || y >= r.y+r.h)
-			continue;
+	const TrayHit *target = tray_hit(w, x, y);
+	if (target) {
+		TrayHit hit = *target;
 		if (event->button == Button3 && hit.kind == HitRow && tray->kind != TrayDisplays)
 			tray_action(tray, TrayForget, hit.row);
 		if (event->button != Button1)
@@ -667,7 +697,6 @@ panel_click(Tray *tray, XButtonEvent *event)
 		case HitDisplayAction: tray_action(tray, hit.value, NULL); break;
 		}
 		tray_changed(tray);
-		return;
 	}
 }
 
@@ -733,7 +762,7 @@ window_events(gint fd, GIOCondition condition, gpointer data)
 		} else if (window == v->icon) {
 			if (event.type == ButtonPress && event.xbutton.button == Button1)
 				tray_popup(tray);
-			if (event.type == ButtonPress && event.xbutton.button == Button3 && tray->kind == TrayNotifications)
+			if (event.type == ButtonPress && event.xbutton.button == Button3 && tray->kind != TrayDisplays)
 				tray_action(tray, TrayToggle, NULL);
 			if (event.type == Expose || event.type == EnterNotify || event.type == LeaveNotify) {
 				if (event.type != Expose)
@@ -840,6 +869,9 @@ main(int argc, char **argv)
 	}
 	fcntl(ConnectionNumber(dpy), F_SETFD, FD_CLOEXEC);
 	XSetErrorHandler(xerror);
+	win.cursors[TrayCursorNormal] = XCreateFontCursor(dpy, XC_left_ptr);
+	win.cursors[TrayCursorHand] = XCreateFontCursor(dpy, XC_hand2);
+	win.cursors[TrayCursorText] = XCreateFontCursor(dpy, XC_xterm);
 	win.screen = DefaultScreen(dpy);
 	ShellHost *h = &win.host;
 	*h = (ShellHost){.dpy = dpy, .root = RootWindow(dpy, win.screen), .visual = DefaultVisual(dpy, win.screen),

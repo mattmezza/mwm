@@ -6,6 +6,7 @@
 
 enum TrayHitKind { HitRadio, HitScan, HitRow, HitForget, HitField, HitAccept, HitCancel, HitWifi,
                  HitVpn, HitHidden, HitVisible, HitClear, HitBack, HitDisplayAction };
+enum TrayCursor { TrayCursorNormal, TrayCursorHand, TrayCursorText, TrayCursorCount };
 typedef struct {
 	cui_rect rect;
 	enum TrayHitKind kind;
@@ -32,6 +33,8 @@ typedef struct {
 	Atom instance, nod_client, clipboard, utf8, paste;
 	XIM im;
 	XIC ic;
+	Cursor cursors[TrayCursorCount];
+	enum TrayCursor pointer;
 	const char *config_path, *title;
 	gboolean explicit_config;
 	guint frame_id, redraw_id;

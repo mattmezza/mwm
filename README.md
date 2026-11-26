@@ -14,7 +14,7 @@ Geist and Geist Mono with an Xresources palette and a Runware-generated Alpine w
 
 | Calendar | World clock and timer |
 | --- | --- |
-| ![Monthly calendar with today highlighted and month and year selectors](docs/screenshots/calendar.webp) | ![World clock with four time zones and the timer disclosure expanded to show scrollable quick links](docs/screenshots/world-clock.webp) |
+| ![Monthly calendar with today highlighted and month and year selectors](docs/screenshots/calendar.webp) | ![World clock with four time zones and its timer editor open](docs/screenshots/world-clock.webp) |
 | Click the date to open the calendar. | Click the time for world clocks, then expand Timer to set an alert. |
 
 ![Month and year grids with a highlighted selection and paging arrows](docs/screenshots/calendar-pickers.webp)
@@ -270,13 +270,14 @@ The default config assigns tag 1 to monitor 0. Set `1 = -1` under
   a calendar day to copy a date in `YYYY-MM-DD` format.
 - Click the time to see local time and the configured world clocks. Open **Timer** and choose
   **Alert me in** for a duration expressed as minutes, `HH:MM`, or `HH:MM:SS`,
-  or **Alert me at** for the next occurrence of a 24-hour local `HH:MM`. The
-  timer field is ready to type when you expand the editor. Use the number row or
-  keypad, then press Enter or click **Set**. Click a duration or upcoming local
-  hour in the horizontally scrollable quick-start row to start immediately.
+  or **Alert me at** for the next occurrence of a 24-hour local `HH:MM`. Use
+  Up or Down to switch modes and Tab to jump between the time and optional
+  message. Press Enter or click **Set**, or click a quick preset to start
+  immediately with the message you entered. Scroll the preset row for more options.
   The clock icon fills as the timer advances. Reopen **Timer** to cancel it.
   Right-click the time to copy an ISO timestamp with seconds and the local UTC
-  offset. Customize the quick-start row under `[clock]`.
+  offset. Customize the presets under `[clock]` and set `blink_separator = false`
+  there to keep the bar clock colon steady.
 - Click the focused title or run `mwmc palette` to search for windows by title or
   class, jump to tags, or change layouts. Use Up, Down, and Enter to select.
   Right-click the title to copy the window name to the clipboard.
@@ -286,8 +287,9 @@ The default config assigns tag 1 to monitor 0. Set `1 = -1` under
 The timer uses `notify-send` and a desktop notification daemon by default.
 If delivery on the session bus fails, mwm retries with the user D-Bus socket
 when available. Set `timer_hook` in `[clock]` to an executable path or command
-on `PATH`. The hook receives a title and body as two arguments. Timers survive
-configuration reloads and in-place WM restarts.
+on `PATH`. The hook receives the alert title and body as two arguments. The body
+contains the optional message. Timers survive configuration reloads and in-place
+WM restarts.
 
 mwm uses CUI to paint the bar, panels, and their shadows. With picom, apply the
 `class_g = 'mwm'` rule from the supplied profile so the compositor leaves mwm's
@@ -345,8 +347,9 @@ radios. `mwmc reload` applies config and Xresources changes to both applets.
 For an alternate file use `mwm-tray -c /path/to/config.ini wifi` or the same
 option with `bluetooth`. In a panel, use arrows and Enter to choose an item,
 Space to toggle the radio, R to scan, or Escape to dismiss. Tab switches
-between Wi-Fi and VPN or moves between fields in a prompt. Right-click a
-saved network or paired device to forget it.
+between Wi-Fi and VPN or moves between fields in a prompt. Right-click the
+tray icon to toggle its radio. Right-click a saved network or paired device
+in the panel to forget it.
 
 ### Notifications
 

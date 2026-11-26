@@ -56,7 +56,7 @@
 #define HEIGHT(X)               ((X)->h + 2 * (X)->bw)
 
 /* enums */
-enum { CurNormal, CurResize, CurMove, CurLast }; /* cursor */
+enum { CurNormal, CurResize, CurMove, CurHand, CurText, CurLast };
 enum { NetSupported, NetWMName, NetWMState, NetWMCheck,
        NetSystemTray, NetSystemTrayOP, NetSystemTrayOrientation, NetSystemTrayOrientationHorz,
        NetSystemTrayVisual, NetSystemTrayColors, NetWMWindowType, NetWMWindowTypeDock, NetWMWindowTypeDialog,
@@ -327,6 +327,7 @@ static Time clipboard_time;
 static int running = 1;
 static int shapeext = 0, shapeevbase = 0;
 static Cursor cursor[CurLast];
+static XIM input_method;
 static Display *dpy;
 static Monitor *mons, *selmon;
 static Client *clients = NULL;  /* global attach/tile order */
@@ -1680,7 +1681,7 @@ drawbar(Monitor *m)
 }
 
 static void
-paintbar(Monitor *m, time_t now, double tick)
+paintbar(Monitor *m, time_t now, double tick, int separator)
 {
 	m->bardirty = 0;
 	if (!bar_level)
@@ -1697,7 +1698,7 @@ paintbar(Monitor *m, time_t now, double tick)
 		.tray_width = tray_width, .tray_shown = tray_width && systrayvisible && settings.showsystray,
 		.tag = m->seltag, .layout = m->seltag < 0 ? -1 : tagstate[m->seltag].layout,
 		.title = m->sel ? m->sel->name : "", .status = stext, .system = &system_stats,
-		.controls = &controls, .hidden = hidden_segments,
+		.controls = &controls, .hidden = hidden_segments, .clock_separator = separator,
 	};
 	int urgency[MAX_TAGS] = {0}, occupancy[MAX_TAGS] = {0};
 	for (Client *c = clients; c; c = c->next) {
@@ -1716,6 +1717,12 @@ paintbar(Monitor *m, time_t now, double tick)
 	                    m->barwin, &state, &timer, now, tick))
 		return;
 	m->barmapped = 1;
+	enum ShellAction under_pointer = shell_hit(m->bar.hits, m->bar.nhits, m->bar.hover_x, m->bar.hover_y).action;
+	int style = under_pointer == ActNone ? CurNormal : CurHand;
+	if (m->bar.pointer != style) {
+		XDefineCursor(dpy, m->barwin, cursor[style]);
+		m->bar.pointer = style;
+	}
 	if (tooltip.mapped && shell_bar_metric(&m->bar, m->bar.hover_x, m->bar.hover_y) != MetricNone)
 		tooltip.dirty = 1;
 	if (owns_tray) {
@@ -3736,6 +3743,10 @@ setup(const RestartState *state)
 	cursor[CurNormal] = XCreateFontCursor(dpy, XC_left_ptr);
 	cursor[CurResize] = XCreateFontCursor(dpy, XC_sizing);
 	cursor[CurMove] = XCreateFontCursor(dpy, XC_fleur);
+	cursor[CurHand] = XCreateFontCursor(dpy, XC_hand2);
+	cursor[CurText] = XCreateFontCursor(dpy, XC_xterm);
+	XSetLocaleModifiers("");
+	input_method = XOpenIM(dpy, NULL, NULL, NULL);
 
 	/* supporting wm check window (EWMH) */
 	wmcheckwin = XCreateSimpleWindow(dpy, root, 0, 0, 1, 1, 0, 0, 0);
@@ -3780,6 +3791,8 @@ cleanup(void)
 	running = 0;
 	controls_reset(&controls);
 	shell_panel_close(&shell, &panel);
+	if (input_method)
+		XCloseIM(input_method);
 	shell_popup_exit_reset(&shell, &panel_exit);
 	shell_tooltip_close(&shell, &tooltip);
 	while (clients)
@@ -3940,7 +3953,8 @@ save_session(FILE *file, Window requestor)
 	if (fwrite(hidden + RestartLegacySegments, sizeof hidden[0], MAX_BAR_SEGMENTS-RestartLegacySegments, file)
 	    != MAX_BAR_SEGMENTS-RestartLegacySegments)
 		return 0;
-	if (fwrite(segments, sizeof segments, 1, file) != 1)
+	if (fwrite(segments, sizeof segments, 1, file) != 1 ||
+	    fwrite(timer.message, sizeof timer.message, 1, file) != 1)
 		return 0;
 	return fflush(file) == 0 && fseek(file, 0, SEEK_SET) == 0;
 }
@@ -4142,6 +4156,10 @@ resume_session(FILE *file, const RestartState *state)
 		else
 			hidden_segments &= ~(1u << index);
 	}
+	char timer_message[TimerMessageSize] = "";
+	bytes = fread(timer_message, 1, sizeof timer_message, file);
+	if (ferror(file) || (bytes && (bytes != sizeof timer_message || timer_message[sizeof timer_message-1])))
+		die("mwm: incomplete timer message");
 	fclose(file);
 
 	/* Retire the previous resources under one grab. The server reparents and
@@ -4168,9 +4186,11 @@ resume_session(FILE *file, const RestartState *state)
 	bar_controls.backlight_device[sizeof bar_controls.backlight_device-1] = 0;
 	if (!strcmp(bar_controls.backlight_device, settings.backlight_device))
 		controls.reading[ControlBrightness].brightness_restore = bar_controls.brightness_restore;
-	if (timer.active)
+	if (timer.active) {
 		timer.duration = isfinite(timer_duration) && timer_duration > 0 ? timer_duration
 		                 : fmax(1, shell_timer_remaining(&timer, time(NULL), shell_seconds()));
+		memcpy(timer.message, timer_message, sizeof timer.message);
+	}
 	Monitor *mapping[MaxMonitors];
 	restore_monitors(state, mapping);
 
@@ -4301,6 +4321,7 @@ dismisspanel(void)
 	if (!panel.win)
 		return;
 	int direction = panel.kind == ActPalette || settings.topbar ? 1 : -1;
+	shell_panel_end_input(&panel);
 	XUngrabPointer(dpy, CurrentTime);
 	XUngrabKeyboard(dpy, CurrentTime);
 	shell_popup_dismiss(&shell, &settings, &panel_exit, panel.win, &panel.surface, direction);
@@ -4318,6 +4339,12 @@ openpanel(Monitor *m, enum ShellAction action, float anchor, Time event_time)
 		return;
 	if (shell_panel_open(&shell, &settings, &panel, action, m->num,
 	                     m->mx, m->my, m->mw, m->mh, m->by, bh, anchor, event_time)) {
+		if (action == ActClock && input_method) {
+			panel.ic = XCreateIC(input_method, XNInputStyle, XIMPreeditNothing | XIMStatusNothing,
+			                     XNClientWindow, panel.win, XNFocusWindow, panel.win, NULL);
+			if (panel.ic)
+				XSetICFocus(panel.ic);
+		}
 		panel_dirty = 1;
 		m->bar.hover_x = m->bar.hover_y = -1;
 		drawbar(m);
@@ -4329,12 +4356,13 @@ timer_start(enum ShellAction action, time_t value)
 {
 	if (timer.active)
 		return;
-	int started = action == ActTimerSet ? shell_timer_set(&timer, panel.at, panel.input, panel.message)
-	              : shell_timer_preset(&timer, action == ActTimerAtPreset, value, panel.message);
+	int started = action == ActTimerSet ? shell_timer_set(&timer, panel.at, panel.input, panel.timer_error)
+	              : shell_timer_preset(&timer, action == ActTimerAtPreset, value, panel.timer_error);
 	if (started) {
-		panel.input[0] = panel.message[0] = 0;
-		panel.cursor = 0;
-		shell_clock_resize(&shell, &settings, &panel, 0, 1);
+		strcpy(timer.message, panel.message);
+		panel.input[0] = panel.message[0] = panel.timer_error[0] = 0;
+		panel.cursor = panel.message_cursor = panel.message_focus = 0;
+		shell_clock_resize(&settings, &panel, 0, 1);
 		drawbars();
 	}
 }
@@ -4391,7 +4419,7 @@ panel_activate(enum ShellAction action, time_t value)
 		panel.calendar_view = CalendarDays;
 		break;
 	case ActTimerToggle:
-		shell_clock_resize(&shell, &settings, &panel, !panel.timer_open, timer.active);
+		shell_clock_resize(&settings, &panel, !panel.timer_open, timer.active);
 		break;
 	case ActPresetPrevious:
 		panel.preset_start = MAX(0, panel.preset_start-1);
@@ -4402,19 +4430,23 @@ panel_activate(enum ShellAction action, time_t value)
 	case ActAt:
 	case ActIn:
 		if (panel.at != (action == ActAt)) {
-			panel.input[0] = panel.message[0] = 0;
+			panel.input[0] = panel.timer_error[0] = 0;
 			panel.cursor = 0;
 			panel.preset_start = 0;
 		}
 		panel.at = action == ActAt;
+		panel.message_focus = 0;
 		break;
-	case ActTimerInput: panel.cursor = strlen(panel.input); break;
+	case ActTimerInput:
+	case ActTimerMessage:
+		panel.message_focus = action == ActTimerMessage;
+		break;
 	case ActTimerSet:
 	case ActTimerInPreset:
 	case ActTimerAtPreset: timer_start(action, value); break;
 	case ActTimerCancel:
 		timer = (ShellTimer){0};
-		shell_clock_resize(&shell, &settings, &panel, 0, 0);
+		shell_clock_resize(&settings, &panel, 0, 0);
 		drawbars();
 		break;
 	case ActZonePrevious:
@@ -4430,45 +4462,69 @@ panel_activate(enum ShellAction action, time_t value)
 }
 
 static void
-timer_key(KeySym key, int ch)
+timer_key(KeySym key, const char *bytes, size_t count)
 {
-	int length = strlen(panel.input), cursor = panel.cursor;
 	if (timer.active)
 		return;
+	char *text = panel.message_focus ? panel.message : panel.input;
+	int *cursor = panel.message_focus ? &panel.message_cursor : &panel.cursor;
+	size_t length = strlen(text), pos = *cursor;
+	size_t before = pos, after = pos;
+	if (before)
+		do {
+			--before;
+		} while (((unsigned char)text[before] & 0xc0) == 0x80);
+	if (after < length)
+		do {
+			++after;
+		} while (((unsigned char)text[after] & 0xc0) == 0x80);
 	switch (key) {
 	case XK_Return: case XK_KP_Enter: panel_activate(ActTimerSet, 0); break;
 	case XK_Tab: case XK_ISO_Left_Tab:
+		panel.message_focus = !panel.message_focus;
+		break;
+	case XK_Up: case XK_Down: case XK_KP_Up: case XK_KP_Down:
 		panel_activate(panel.at ? ActIn : ActAt, 0);
 		break;
-	case XK_Left: case XK_KP_Left: panel.cursor = MAX(0, cursor-1); break;
-	case XK_Right: case XK_KP_Right: panel.cursor = MIN(length, cursor+1); break;
-	case XK_Home: case XK_KP_Home: panel.cursor = 0; break;
-	case XK_End: case XK_KP_End: panel.cursor = length; break;
-	case XK_BackSpace:
-		if (cursor > 0) {
-			memmove(panel.input+cursor-1, panel.input+cursor, length-cursor+1);
-			--panel.cursor;
-			panel.message[0] = 0;
-		}
+	case XK_Left: case XK_KP_Left: *cursor = before; break;
+	case XK_Right: case XK_KP_Right: *cursor = after; break;
+	case XK_Home: case XK_KP_Home: *cursor = 0; break;
+	case XK_End: case XK_KP_End: *cursor = length; break;
+	case XK_BackSpace: case XK_Delete: case XK_KP_Delete: {
+		size_t start = key == XK_BackSpace ? before : pos;
+		size_t end = key == XK_BackSpace ? pos : after;
+		memmove(text+start, text+end, length-end+1);
+		*cursor = start;
+		if (!panel.message_focus)
+			panel.timer_error[0] = 0;
 		break;
-	case XK_Delete: case XK_KP_Delete:
-		if (cursor < length) {
-			memmove(panel.input+cursor, panel.input+cursor+1, length-cursor);
-			panel.message[0] = 0;
+	}
+	default: {
+		char ch = count == 1 ? bytes[0] : 0;
+		if (!panel.message_focus) {
+			if (key >= XK_KP_0 && key <= XK_KP_9)
+				ch = '0' + key - XK_KP_0;
+			else if (key == XK_colon || key == XK_KP_Separator || key == XK_KP_Decimal)
+				ch = ':';
+			if ((ch != ':' && (ch < '0' || ch > '9')) || length >= (size_t)(panel.at ? 5 : 8))
+				return;
+			bytes = &ch;
+			count = 1;
+			panel.timer_error[0] = 0;
+		} else {
+			if (!count || length + count >= sizeof panel.message)
+				return;
+			for (size_t i = 0; i < count; ++i)
+				if ((unsigned char)bytes[i] < 32 || (unsigned char)bytes[i] == 127)
+					return;
+			if (!valid_utf8((const unsigned char *)bytes, count))
+				return;
 		}
+		memmove(text+pos+count, text+pos, length-pos+1);
+		memcpy(text+pos, bytes, count);
+		*cursor += count;
 		break;
-	default:
-		if (key >= XK_KP_0 && key <= XK_KP_9)
-			ch = '0' + key - XK_KP_0;
-		else if (key == XK_colon || key == XK_KP_Separator || key == XK_KP_Decimal)
-			ch = ':';
-		if ((ch == ':' || (ch >= '0' && ch <= '9')) && length < (panel.at ? 5 : 8)) {
-			memmove(panel.input+cursor+1, panel.input+cursor, length-cursor+1);
-			panel.input[cursor] = ch;
-			++panel.cursor;
-			panel.message[0] = 0;
-		}
-		break;
+	}
 	}
 	panel_dirty = 1;
 }
@@ -4493,10 +4549,20 @@ adjust_control(int kind, int direction)
 static void
 panel_key(XKeyEvent *event)
 {
-	char latin1[32], bytes[2 * sizeof latin1 + 1];
-	KeySym key;
-	int raw = XLookupString(event, latin1, sizeof latin1, &key, NULL);
-	size_t n = latin1_utf8(bytes, sizeof bytes, latin1, raw > 0 ? raw : 0);
+	char bytes[TimerMessageSize];
+	KeySym key = NoSymbol;
+	size_t n;
+	if (panel.ic) {
+		Status status;
+		int length = Xutf8LookupString(panel.ic, event, bytes, sizeof bytes, &key, &status);
+		if (status == XBufferOverflow)
+			return;
+		n = MAX(0, length);
+	} else {
+		char latin1[32];
+		int length = XLookupString(event, latin1, sizeof latin1, &key, NULL);
+		n = latin1_utf8(bytes, sizeof bytes, latin1, MAX(0, length));
+	}
 	if (key == XK_Escape) {
 		if (panel.kind == ActCalendar && panel.calendar_view != CalendarDays) {
 			panel.calendar_view = CalendarDays;
@@ -4534,7 +4600,7 @@ panel_key(XKeyEvent *event)
 		if (!panel.timer_open && (key == XK_Return || key == XK_KP_Enter))
 			panel_activate(ActTimerToggle, 0);
 		else if (panel.timer_open && !(event->state & ControlMask))
-			timer_key(key, raw == 1 ? (unsigned char)latin1[0] : 0);
+			timer_key(key, bytes, n);
 		return;
 	}
 	if (panel.kind == ActPalette) {
@@ -4569,7 +4635,6 @@ panel_key(XKeyEvent *event)
 		memcpy(panel.input + length, bytes, n);
 		panel.input[length + n] = 0;
 	}
-	panel.message[0] = 0;
 	panel.selected = 0;
 	panel_dirty = 1;
 }
@@ -4602,8 +4667,9 @@ panel_event(XEvent *e)
 		}
 		return;
 	}
-	if (click->x < panel.pad || click->x >= panel.pad + panel.width
-	    || click->y < panel.pad || click->y >= panel.pad + panel.height) {
+	cui_rect body = shell_panel_body(&settings, &panel);
+	if (click->x < body.x || click->x >= body.x + body.w
+	    || click->y < body.y || click->y >= body.y + body.h) {
 		enum ShellAction was = panel.kind;
 		dismisspanel();
 		for (Monitor *m = mons; m; m = m->next) {
@@ -4801,8 +4867,11 @@ static int
 ui_tick(void)
 {
 	static time_t minute = -1, second = -1, checked_compositor = -1;
+	static int previous_separator = -1;
 	static double frame;
-	time_t now = time(NULL);
+	struct timespec wall;
+	clock_gettime(CLOCK_REALTIME, &wall);
+	time_t now = wall.tv_sec;
 	double tick = shell_seconds();
 	Monitor *m = traymonitor();
 	if (systray && m && systray->monitor != m->num)
@@ -4822,10 +4891,10 @@ ui_tick(void)
 		}
 	}
 	if (timer.active && shell_timer_remaining(&timer, now, tick) <= 0) {
-		timer.active = 0;
 		if (panel.win && panel.kind == ActClock)
-			shell_clock_resize(&shell, &settings, &panel, 0, 0);
-		shell_timer_notify(&settings, ConnectionNumber(dpy));
+			shell_clock_resize(&settings, &panel, 0, 0);
+		shell_timer_notify(&settings, &timer, ConnectionNumber(dpy));
+		timer = (ShellTimer){0};
 		drawbars();
 		panel_dirty = panel.win != None;
 	}
@@ -4842,6 +4911,13 @@ ui_tick(void)
 	}
 	second = now;
 	unsigned items = active_bar_items();
+	int blink = settings.blink_separator && (items & (1u << BarTime));
+	int separator = !blink || wall.tv_nsec < 500000000;
+	if (separator != previous_separator) {
+		if (blink)
+			drawbars();
+		previous_separator = separator;
+	}
 	unsigned system_items = (1u << (BarDisk+1)) - (1u << BarCpu);
 	if (!(items & system_items))
 		system_next = 0;
@@ -4864,7 +4940,7 @@ ui_tick(void)
 	int animating = whole_bar.progress != barvisible;
 	for (Monitor *m = mons; m; m = m->next) {
 		if (m->bardirty || (bar_level > 0 && m->bar.animating && can_animate))
-			paintbar(m, now, tick);
+			paintbar(m, now, tick, separator);
 		animating |= bar_level > 0 && m->bar.animating;
 	}
 	int panel_animating = 0;
@@ -4887,6 +4963,14 @@ ui_tick(void)
 			panel.selected = MIN(panel.selected, count - 1);
 		shell_panel_draw(&shell, &shellfont, theme_revision, &settings, &panel,
 		                 &timer, &controls, entries, count, now, tick);
+		enum ShellAction action = shell_hit(panel.hits, panel.nhits, panel.hover_x, panel.hover_y).action;
+		int style = action == ActTimerInput || action == ActTimerMessage || action == ActPaletteInput
+		          ? CurText : action == ActNone ? CurNormal : CurHand;
+		if (style != panel.pointer) {
+			XChangeActivePointerGrab(dpy, ButtonPressMask | ButtonReleaseMask | PointerMotionMask,
+			                         cursor[style], CurrentTime);
+			panel.pointer = style;
+		}
 		panel_dirty = 0;
 		if (control >= 0 && panel.control_request >= 0) {
 			set_control(control, panel.control_request);
@@ -4900,6 +4984,8 @@ ui_tick(void)
 	animating |= shell_tooltip_motion(&shell, &settings, &tooltip, tick, can_animate);
 	int timeout = animating || panel_animating ? MAX(1, (int)ceil((frame-tick)*1000)) : 1000;
 	timeout = MIN(timeout, controls_timeout);
+	if (blink)
+		timeout = MIN(timeout, 500 - (int)(wall.tv_nsec / 1000000) % 500);
 	if (timer.active)
 		timeout = MIN(timeout, MAX(1, (int)ceil(1000*shell_timer_remaining(&timer, now, tick))));
 	if (system_next)
@@ -4918,6 +5004,8 @@ run(void)
 		for (int n = 0; n < 128 && running && XPending(dpy); ++n) {
 			XEvent ev;
 			XNextEvent(dpy, &ev);
+			if (panel.ic && XFilterEvent(&ev, None))
+				continue;
 			if (panel.win && ev.xany.window == panel.win &&
 			    (ev.type == KeyPress || ev.type == ButtonPress || ev.type == ButtonRelease ||
 			     ev.type == Expose || ev.type == MotionNotify))

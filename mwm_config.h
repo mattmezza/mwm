@@ -73,7 +73,7 @@ typedef struct {
 	int nrules;
 	TimeZone zones[MAX_ZONES];
 	int nzones;
-	int in_presets[MAX_TIMER_PRESETS], nin_presets, at_presets;
+	int in_presets[MAX_TIMER_PRESETS], nin_presets, at_presets, blink_separator;
 	char hook[512];
 } Config;
 

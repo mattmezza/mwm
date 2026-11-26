@@ -351,17 +351,24 @@ shape(const ShellHost *host, ShellSurface *surface, Window win, int w, int h,
 	XFreePixmap(dpy, mask);
 }
 
+static void
+present(const ShellHost *host, ShellSurface *surface, Window win,
+        const cui_rect *body, int radius, int outset)
+{
+	if (body) {
+		int w = surface->image->width, h = surface->image->height;
+		shape(host, surface, win, w, h, body, 1, radius, outset, 1, 0, h);
+	}
+	blit(host, surface, win);
+}
+
 int
 shell_surface_draw(const ShellHost *host, ShellSurface *surface, Window win,
                    const cui_rect *body, int radius, int outset)
 {
 	if (!render(host, surface))
 		return 0;
-	if (body) {
-		int w = surface->image->width, h = surface->image->height;
-		shape(host, surface, win, w, h, body, 1, radius, outset, 1, 0, h);
-	}
-	blit(host, surface, win);
+	present(host, surface, win, body, radius, outset);
 	return 1;
 }
 
@@ -777,7 +784,7 @@ surface_color(const Frame *f, int scheme)
 
 static void
 bar_clock(Frame *f, cui_rect r, const char *text, enum ShellAction action, int id,
-          cui_color bg, cui_color fg, cui_color accent, int with_icon, double progress)
+          cui_color bg, cui_color fg, cui_color accent, int with_icon, double progress, int separator)
 {
 	if (r.w < 12)
 		return;
@@ -800,9 +807,26 @@ bar_clock(Frame *f, cui_rect r, const char *text, enum ShellAction action, int i
 		}
 	}
 	int pad = with_icon ? 31 : 3;
-	label(f, id + 2, (cui_rect){r.x + pad, r.y, r.w - pad - 3, r.h}, text,
-	      fg, f->size, mono, CUI_ALIGN_CENTER);
+	cui_rect content = {r.x + pad, r.y, r.w - pad - 3, r.h};
+	if (action == ActClock && text[0] && content.w >= textwidth(f, text, f->size, mono)) {
+		cui_text_color_span blank = {2, 3, transparent};
+		cui_begin_absolute_box(f->ui, id + 2, (cui_box){
+			.width = content.w, .height = content.h, .align_y = CUI_ALIGN_CENTER,
+		}, content);
+		cui_text_paragraph_colored_aligned(f->ui, cui_string(text), f->size, fg, ceilf(f->size + 4),
+		                                  mono, false, separator ? NULL : &blank, !separator,
+		                                  CUI_TEXT_ALIGN_CENTER);
+		cui_end_box(f->ui);
+	} else {
+		label(f, id + 2, content, text, fg, f->size, mono, CUI_ALIGN_CENTER);
+	}
 	hit(f, r, action, 0);
+}
+
+static float
+bar_clock_size(float size)
+{
+	return roundf(size * 0.875f);
 }
 
 float
@@ -1288,11 +1312,14 @@ bar_item_draw(Frame *f, ShellBar *bar, const ShellBarModel *m, enum BarItem kind
 		const char *text = is_time ? clock : date;
 		r.y += 2;
 		r.h -= 4;
+		float size = f->size;
+		f->size = bar_clock_size(size);
 		int with_icon = r.w >= textwidth(f, text, f->size, mono) + 34;
 		double progress = is_time && timer->active && c->timer_indicator && timer->duration > 0
 		                  ? 1 - fmin(fmax(shell_timer_remaining(timer, now, tick) / timer->duration, 0), 1) : -1;
 		bar_clock(f, r, text, is_time ? ActClock : ActCalendar,
-		          is_time ? 15 : 11, bg, fg, accent, with_icon, progress);
+		          is_time ? 15 : 11, bg, fg, accent, with_icon, progress, m->clock_separator);
+		f->size = size;
 		break;
 	}
 	case BarTray: {
@@ -1398,7 +1425,8 @@ shell_bar_draw(const ShellHost *host, const ShellFont *font, unsigned revision,
 	int statusw = status[0] ? textwidth(&f, status, size, mono) : 0;
 	if (m->title[0])
 		statusw = MIN(statusw, w/3);
-	int dw = textwidth(&f, date, size, mono), cw = textwidth(&f, clock, size, mono);
+	float clock_size = bar_clock_size(size);
+	int dw = textwidth(&f, date, clock_size, mono), cw = textwidth(&f, clock, clock_size, mono);
 	ItemSize sizes[BarItemCount] = {
 		[BarTags] = {tags, MIN(tags, 32), 0},
 		[BarLayout] = {m->layout < 0 ? 0 : LayoutButtonWidth-6, m->layout < 0 ? 0 : 18, 0},
@@ -1746,7 +1774,7 @@ shell_calendar_shift(ShellPanel *panel, int months)
 	panel->month = month % 12;
 }
 
-enum { ClockHeader = 54, ClockZone = 40, ClockFooter = 44, ClockEditor = 130, ClockCancel = 47 };
+enum { ClockHeader = 54, ClockZone = 40, ClockFooter = 42, ClockEditor = 146, ClockCancel = 45 };
 
 static int
 clock_height(const Config *config, int limit, int open, int active, int *zone_rows)
@@ -1757,7 +1785,7 @@ clock_height(const Config *config, int limit, int open, int active, int *zone_ro
 }
 
 void
-shell_clock_resize(const ShellHost *host, const Config *config, ShellPanel *panel, int open, int active)
+shell_clock_resize(const Config *config, ShellPanel *panel, int open, int active)
 {
 	int rows;
 	int height = clock_height(config, panel->clock_limit, open, active, &rows);
@@ -1767,10 +1795,17 @@ shell_clock_resize(const ShellHost *host, const Config *config, ShellPanel *pane
 	panel->zone_rows = rows;
 	panel->height = height;
 	panel->preset_area = (cui_rect){0};
-	panel->window_y = panel->clock_anchor - (config->topbar ? 0 : height + 2*panel->pad);
-	shell_popup_entrance(config, panel->opened, shell_seconds(), config->topbar ? 1 : -1, &panel->offset_y);
-	XMoveResizeWindow(host->dpy, panel->win, panel->window_x, panel->window_y + panel->offset_y,
-	                  panel->width+2*panel->pad, height+2*panel->pad);
+	if (!panel->clock_height)
+		panel->window_y = panel->clock_anchor - (config->topbar ? 0 : height + 2*panel->pad);
+}
+
+cui_rect
+shell_panel_body(const Config *config, const ShellPanel *panel)
+{
+	int y = panel->pad;
+	if (!config->topbar && panel->clock_height)
+		y += panel->clock_height - panel->height;
+	return (cui_rect){panel->pad, y, panel->width, panel->height};
 }
 
 int
@@ -1804,15 +1839,28 @@ shell_panel_open(const ShellHost *host, const Config *config, ShellPanel *panel,
 	int margin = MIN(config->barmargin, (w - width)/2);
 	int edge = MAX(0, margin - pad);
 	px = MAX(x + edge, MIN(px, x + w - width - 2*pad - edge));
+	/* Keep the X window and its entrance animation stable as Timer expands.
+	 * Shape exposes the visible portion and limits the input area. */
+	int expanded_rows, fixed_height = 0;
+	if (kind == ActClock && host->shape) {
+		int expanded = clock_height(config, clock_limit, 1, 0, &expanded_rows);
+		int running = clock_height(config, clock_limit, 1, 1, &expanded_rows);
+		fixed_height = height;
+		if (expanded <= clock_limit)
+			fixed_height = MAX(fixed_height, expanded);
+		if (running <= clock_limit)
+			fixed_height = MAX(fixed_height, running);
+	}
+	int window_height = (fixed_height ? fixed_height : height) + 2*pad;
 	if (kind != ActPalette && !config->topbar)
-		py -= height + 2*pad;
+		py -= window_height;
 	struct tm local = {0};
 	time_t now = time(NULL);
 	localtime_r(&now, &local);
 	*panel = (ShellPanel){.kind = kind, .monitor = monitor, .width = width,
 	                      .height = height, .pad = pad, .year = local.tm_year+1900, .month = local.tm_mon,
 	                      .zone_rows = zone_rows, .clock_limit = clock_limit, .clock_anchor = clock_anchor,
-	                      .window_x = px, .window_y = py,
+	                      .window_x = px, .window_y = py, .window_height = window_height, .clock_height = fixed_height,
 	                      .hover_x = -1, .hover_y = -1, .control_request = -1,
 	                      .opened = shell_seconds()};
 	XSetWindowAttributes attrs = {
@@ -1822,7 +1870,7 @@ shell_panel_open(const ShellHost *host, const Config *config, ShellPanel *panel,
 	Display *dpy = host->dpy;
 	shell_popup_entrance(config, panel->opened, panel->opened, kind == ActPalette || config->topbar ? 1 : -1,
 	                     &panel->offset_y);
-	panel->win = XCreateWindow(dpy, host->root, px, py + panel->offset_y, width+2*pad, height+2*pad,
+	panel->win = XCreateWindow(dpy, host->root, px, py + panel->offset_y, width+2*pad, window_height,
 	                           0, host->depth, InputOutput, host->visual,
 	                           CWOverrideRedirect | CWBackPixel | CWBorderPixel | CWColormap | CWEventMask,
 	                           &attrs);
@@ -1830,6 +1878,11 @@ shell_panel_open(const ShellHost *host, const Config *config, ShellPanel *panel,
 	XSetClassHint(dpy, panel->win, &klass);
 	XStoreName(dpy, panel->win, control >= 0 ? control_name[control] : kind == ActCalendar ? "mwm calendar"
 	           : kind == ActClock ? "mwm clock" : "mwm command palette");
+	if (fixed_height) {
+		cui_rect body = shell_panel_body(config, panel);
+		shape(host, &panel->surface, panel->win, width+2*pad, window_height, &body, 1,
+		      config->panelradius, pad, 1, 0, window_height);
+	}
 	XMapRaised(dpy, panel->win);
 	int pointer = XGrabPointer(dpy, panel->win, False, ButtonPressMask | ButtonReleaseMask | PointerMotionMask,
 	                           GrabModeAsync, GrabModeAsync, None, None, event_time);
@@ -1842,10 +1895,21 @@ shell_panel_open(const ShellHost *host, const Config *config, ShellPanel *panel,
 }
 
 void
+shell_panel_end_input(ShellPanel *panel)
+{
+	if (panel->ic) {
+		XUnsetICFocus(panel->ic);
+		XDestroyIC(panel->ic);
+		panel->ic = NULL;
+	}
+}
+
+void
 shell_panel_close(const ShellHost *host, ShellPanel *panel)
 {
 	if (!panel->win)
 		return;
+	shell_panel_end_input(panel);
 	XDestroyWindow(host->dpy, panel->win);
 	shell_surface_free(host, &panel->surface);
 	*panel = (ShellPanel){0};
@@ -1963,14 +2027,14 @@ calendar(Frame *f, const ShellPanel *p, const struct tm *local, cui_color fg,
 
 static void
 timer_presets(Frame *f, ShellPanel *p, cui_rect row, time_t now, const struct tm *local,
-              cui_color accent)
+              cui_color fg, cui_color accent, cui_color card)
 {
 	int count = p->at ? f->config->at_presets : f->config->nin_presets;
 	p->preset_area = row;
 	p->preset_more = 0;
 	if (!count)
 		return;
-	const float side = 16, spacing = 7;
+	const float side = 18, gap = 7;
 	float size = MAX(9, f->size-2);
 	float left = row.x+side;
 	float right = row.x+row.w-side;
@@ -2001,14 +2065,17 @@ timer_presets(Frame *f, ShellPanel *p, cui_rect row, time_t now, const struct tm
 		}
 		if (i < p->preset_start)
 			continue;
-		float width = textwidth(f, caption, size, mono) + spacing;
+		float width = textwidth(f, caption, size, mono) + 14;
 		if (left + width > right) {
 			p->preset_more = 1;
 			break;
 		}
-		text_link(f, 400+i*2, (cui_rect){left, row.y, width, row.h}, caption, size, accent,
-		          p->at ? ActTimerAtPreset : ActTimerInPreset, value, 1);
-		left += width;
+		cui_rect chip = {left, row.y+2, width, row.h-4};
+		cui_color fill = inside(chip, f->hover_x, f->hover_y) ? blend(card, accent, 0.20f) : card;
+		box(f, 400+i*2, chip, f->config->panelradius, fill, transparent, 0, 0);
+		label(f, 401+i*2, chip, caption, fg, size, mono, CUI_ALIGN_CENTER);
+		hit(f, chip, p->at ? ActTimerAtPreset : ActTimerInPreset, value);
+		left += width + gap;
 	}
 	if (p->preset_start)
 		button(f, 454, (cui_rect){row.x, row.y, side, row.h}, "", ActPresetPrevious, transparent, accent, 12);
@@ -2017,11 +2084,44 @@ timer_presets(Frame *f, ShellPanel *p, cui_rect row, time_t now, const struct tm
 }
 
 static void
+timer_field(Frame *f, int id, cui_rect field, const char *value, const char *placeholder,
+            int focus, int cursor, enum ShellAction action, cui_text_style style,
+            cui_color fg, cui_color muted, cui_color accent, cui_color card, cui_color outline)
+{
+	float size = MAX(9, f->size - 2);
+	cui_rect text = {field.x+9, field.y, field.w-18, field.h};
+	const char *start = value;
+	float caret = 0;
+	if (focus) {
+		char prefix[TimerMessageSize];
+		size_t skip = 0;
+		while (skip < (size_t)cursor) {
+			memcpy(prefix, value+skip, cursor-skip);
+			prefix[cursor-skip] = 0;
+			caret = textwidth(f, prefix, size, style);
+			if (caret <= text.w - 2)
+				break;
+			do {
+				++skip;
+			} while (((unsigned char)value[skip] & 0xc0) == 0x80);
+			caret = 0;
+		}
+		start += skip;
+	}
+	box(f, id, field, f->config->panelradius, card, focus ? accent : outline, 1, 0);
+	label(f, id+1, text, *value ? start : placeholder, *value ? fg : muted, size, style, CUI_ALIGN_START);
+	if (focus)
+		box(f, id+2, (cui_rect){text.x+caret, field.y+(field.h-size)/2, 1, size}, 0, accent, transparent, 0, 0);
+	hit(f, field, action, 0);
+}
+
+static void
 world_clock(Frame *f, ShellPanel *p, const ShellTimer *timer, const struct tm *local,
             time_t now, double tick, cui_color fg, cui_color muted, cui_color accent,
             cui_color ink, cui_color card, cui_color outline)
 {
-	float x = p->pad, y = p->pad, w = p->width;
+	cui_rect body = shell_panel_body(f->config, p);
+	float x = body.x, y = body.y, w = body.w;
 	float small = MAX(9, f->size - 1);
 	float radius = f->config->panelradius;
 	float time_width = textwidth(f, "00:00", f->size, mono) + 2;
@@ -2077,30 +2177,28 @@ world_clock(Frame *f, ShellPanel *p, const ShellTimer *timer, const struct tm *l
 	if (!p->timer_open)
 		return;
 	if (timer->active) {
-		label(f, 309, (cui_rect){x+24, fold+43, w-145, 33}, "Alert scheduled", muted, small, regular, CUI_ALIGN_START);
+		label(f, 309, (cui_rect){x+24, fold+43, w-145, 33}, *timer->message ? timer->message : "Alert scheduled",
+		      *timer->message ? fg : muted, small, regular, CUI_ALIGN_START);
 		button(f, 320, (cui_rect){x+w-103, fold+43, 86, 33}, "Cancel", ActTimerCancel, card, fg, 0);
 		return;
 	}
-	float bw = (w-40)/2;
-	button(f, 330, (cui_rect){x+17, fold+43, bw, 29}, "Alert me in", ActIn,
+	float left = x+17, right = x+w-17, inner = right-left, gap = 14;
+	float bw = (inner-gap)/2;
+	button(f, 330, (cui_rect){left, fold+42, bw, 32}, "Alert me in", ActIn,
 	       p->at ? card : accent, p->at ? fg : ink, 0);
-	button(f, 340, (cui_rect){x+23+bw, fold+43, bw, 29}, "Alert me at", ActAt,
+	button(f, 340, (cui_rect){left+bw+gap, fold+42, bw, 32}, "Alert me at", ActAt,
 	       p->at ? accent : card, p->at ? ink : fg, 0);
-	cui_rect input = {x+17, fold+80, w-115, 35};
-	box(f, 350, input, radius, card, accent, 1, 0);
-	label(f, 351, (cui_rect){input.x+12, input.y, input.w-21, input.h},
-	      p->input[0] ? p->input : p->at ? "HH:MM" : "Minutes / HH:MM:SS",
-	      p->input[0] ? fg : muted, small, mono, CUI_ALIGN_START);
-	char prefix[sizeof p->input];
-	snprintf(prefix, sizeof prefix, "%.*s", p->cursor, p->input);
-	float caret = prefix[0] ? textwidth(f, prefix, small, mono) : 0;
-	if (caret < input.w-21)
-		box(f, 352, (cui_rect){input.x+10+caret, input.y+9, 1, 17}, 0, accent, transparent, 0, 0);
-	hit(f, input, ActTimerInput, 0);
-	button(f, 360, (cui_rect){x+w-90, input.y, 73, input.h}, "Set", ActTimerSet, accent, ink, 0);
-	timer_presets(f, p, (cui_rect){x+17, fold+121, w-34, 23}, now, local, accent);
-	if (p->message[0])
-		label(f, 370, (cui_rect){x+17, fold+147, w-34, 20}, p->message,
+	float input_width = MIN(172, (inner-gap)*0.43f);
+	timer_field(f, 350, (cui_rect){left, fold+83, input_width, 34}, p->input,
+	            p->at ? "HH:MM" : "Min / HH:MM:SS", !p->message_focus, p->cursor,
+	            ActTimerInput, mono, fg, muted, accent, card, outline);
+	timer_field(f, 354, (cui_rect){left+input_width+gap, fold+83, inner-input_width-gap, 34}, p->message,
+	            "Message (optional)", p->message_focus, p->message_cursor,
+	            ActTimerMessage, regular, fg, muted, accent, card, outline);
+	timer_presets(f, p, (cui_rect){left, fold+126, inner-74, 31}, now, local, fg, accent, card);
+	button(f, 360, (cui_rect){right-64, fold+126, 64, 31}, "Set", ActTimerSet, accent, ink, 0);
+	if (p->timer_error[0])
+		label(f, 370, (cui_rect){left, fold+162, inner, 21}, p->timer_error,
 		      f->config->palette[SchemeUrg][ColBg], small, regular, CUI_ALIGN_START);
 }
 
@@ -2110,6 +2208,7 @@ palette(Frame *f, const ShellPanel *p, const ShellEntry *entries, int count,
 {
 	float x = p->pad, y = p->pad, w = p->width, h = p->height;
 	box(f, 110, (cui_rect){x+15, y+15, w-30, 44}, f->config->panelradius, card, alpha(accent, 170), 1, 0);
+	hit(f, (cui_rect){x+15, y+15, w-30, 44}, ActPaletteInput, 0);
 	glyph(f, 111, x+28, y+29, 16, ActPalette, accent);
 	label(f, 112, (cui_rect){x+53, y+15, w-82, 44},
 	      p->input[0] ? p->input : "Find a window, tag, or layout…",
@@ -2178,6 +2277,7 @@ control_panel(Frame *f, ShellPanel *p, const Controls *controls, enum Control ki
 	cui_end_box(f->ui);
 	int shown = p->slider.dragging ? (int)p->slider.preview : value;
 	if (adjustable) {
+		hit(f, track, ActControlTrack, 0);
 		float xx = track.x + track.w * (MAX(floor, shown)-floor) / (100-floor);
 		box(f, 115, (cui_rect){xx-5, track.y+9, 10, 10}, 5, fg, bg, 1, 0);
 	}
@@ -2226,7 +2326,7 @@ shell_panel_draw(const ShellHost *host, const ShellFont *font, unsigned revision
                  const Config *c, ShellPanel *p, const ShellTimer *timer,
                  const Controls *controls, const ShellEntry *entries, int count, time_t now, double tick)
 {
-	int w = p->width+2*p->pad, h = p->height+2*p->pad;
+	int w = p->width+2*p->pad, h = (p->clock_height ? p->clock_height : p->height)+2*p->pad;
 	if (!p->win || !shell_surface_begin(host, font, revision, &p->surface, p->win, w, h, 0.016))
 		return 0;
 	Frame f = {p->surface.ui, font, c, p->hits, 0, COUNT(p->hits),
@@ -2236,7 +2336,7 @@ shell_panel_draw(const ShellHost *host, const ShellFont *font, unsigned revision
 	cui_color accent = alpha(c->palette[SchemeSel][ColBg], 255), ink = c->palette[SchemeSel][ColFg];
 	cui_color card = blend(bg, fg, 0.10f), muted = blend(bg, fg, 0.64f);
 	cui_color outline = blend(bg, fg, 0.19f);
-	cui_rect body = {p->pad, p->pad, p->width, p->height};
+	cui_rect body = shell_panel_body(c, p);
 	shell_popup_background(f.ui, host, c, body, 1);
 	struct tm local = {0};
 	localtime_r(&now, &local);
@@ -2249,8 +2349,21 @@ shell_panel_draw(const ShellHost *host, const ShellFont *font, unsigned revision
 		world_clock(&f, p, timer, &local, now, tick, fg, muted, accent, ink, card, outline);
 	else
 		palette(&f, p, entries, count, fg, muted, accent, ink, card, outline);
-	if (shell_surface_draw(host, &p->surface, p->win, &body, c->panelradius, p->pad))
-		p->nhits = f.nhits;
+	if (!render(host, &p->surface))
+		return 0;
+	int resize = p->window_height != h;
+	int reshape = p->kind == ActClock && (resize || (host->shape && (p->surface.shape_count != 1 ||
+	              memcmp(&p->surface.shapes[0], &body, sizeof body))));
+	if (reshape)
+		XGrabServer(host->dpy);
+	if (resize) {
+		XMoveResizeWindow(host->dpy, p->win, p->window_x, p->window_y + p->offset_y, w, h);
+		p->window_height = h;
+	}
+	present(host, &p->surface, p->win, &body, c->panelradius, p->pad);
+	if (reshape)
+		XUngrabServer(host->dpy);
+	p->nhits = f.nhits;
 	return 1;
 }
 
@@ -2342,9 +2455,10 @@ has_user_bus(void)
 }
 
 void
-shell_timer_notify(const Config *config, int xfd)
+shell_timer_notify(const Config *config, const ShellTimer *timer, int xfd)
 {
-	const char *title = "Timer complete", *body = "Your mwm timer has finished.";
+	const char *title = "Timer complete";
+	const char *body = *timer->message ? timer->message : "Your mwm timer has finished.";
 	pid_t child = fork();
 	if (child < 0) {
 		perror("mwm: timer");

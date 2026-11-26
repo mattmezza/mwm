@@ -30,6 +30,8 @@ done
 
 xvfb-run -a -s '-screen 0 1280x720x24' \
     sh tests/restart.sh "dist/mwm-linux-$arch" "dist/mwmc-linux-$arch"
+xvfb-run -a -s '-screen 0 1280x720x24' \
+    sh tests/clock.sh "dist/mwm-linux-$arch" "dist/mwmc-linux-$arch"
 xvfb-run -a -s '-screen 0 1280x720x24' dbus-run-session -- \
     sh tests/tray.sh "dist/mwm-linux-$arch" "dist/mwmc-linux-$arch" "dist/mwm-tray-linux-$arch"
 xvfb-run -a -s '-screen 0 1280x720x24' \

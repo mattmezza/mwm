@@ -38,7 +38,8 @@ enum ShellAction {
 	ActPast, ActToday, ActFuture, ActAt, ActIn, ActTimerInput, ActTimerSet,
 	ActTimerCancel, ActTimerInPreset, ActTimerAtPreset, ActZonePrevious, ActZoneNext, ActChoose,
 	ActBattery, ActVolume, ActBrightness, ActMonthGrid, ActYearGrid, ActCalendarMonth,
-	ActCalendarYear, ActCalendarDay, ActTimerToggle, ActPresetPrevious, ActPresetNext, ActCopyTime, ActTimerFoldOpen
+	ActCalendarYear, ActCalendarDay, ActTimerToggle, ActPresetPrevious, ActPresetNext, ActCopyTime, ActTimerFoldOpen,
+	ActTimerMessage, ActPaletteInput, ActControlTrack
 };
 
 typedef struct {
@@ -87,7 +88,7 @@ typedef struct {
 	ShellSurface surface;
 	ShellHit hits[MAX_TAGS + 10];
 	int nhits;
-	int hover_x, hover_y;
+	int hover_x, hover_y, pointer;
 	int hovered;
 	double hover_since;
 	int tag;
@@ -123,6 +124,7 @@ typedef struct {
 	const ShellSystem *system;
 	const Controls *controls;
 	unsigned hidden;
+	int clock_separator;
 } ShellBarModel;
 
 typedef struct {
@@ -133,20 +135,23 @@ typedef struct {
 
 enum { EntryWindow, EntryTag, EntryLayout };
 enum { CalendarDays, CalendarMonths, CalendarYears, CalendarYearPage = 12 };
+enum { TimerMessageSize = 256 };
 
 typedef struct {
 	ShellSurface surface;
 	Window win;
+	XIC ic;
 	enum ShellAction kind;
 	int monitor, width, height, pad, year, month;
 	int calendar_view, browse_year;
-	int zone_start, zone_rows, timer_open, at, selected, cursor;
+	int zone_start, zone_rows, timer_open, at, selected, cursor, message_cursor, message_focus;
 	int clock_limit, window_x, window_y, offset_y, clock_anchor, preset_start, preset_more;
+	int window_height, clock_height;
 	cui_rect preset_area;
-	int hover_x, hover_y;
+	int hover_x, hover_y, pointer;
 	ShellHit hits[52];
 	int nhits;
-	char input[128], message[96];
+	char input[128], timer_error[96], message[TimerMessageSize];
 	double opened;
 	cui_slider_state slider;
 	int control_request;
@@ -157,6 +162,7 @@ typedef struct {
 	double due;
 	time_t wall;
 	double duration;
+	char message[TimerMessageSize];
 } ShellTimer;
 
 int shell_font(ShellFont *, const Config *, char error[CONFIG_ERROR]);
@@ -196,17 +202,19 @@ int shell_panel_open(const ShellHost *, const Config *, ShellPanel *, enum Shell
                      int monitor, int x, int y, int w, int h, int by, int bh,
                      float anchor, Time time);
 void shell_panel_close(const ShellHost *, ShellPanel *);
+void shell_panel_end_input(ShellPanel *);
+cui_rect shell_panel_body(const Config *, const ShellPanel *);
 int shell_panel_draw(const ShellHost *, const ShellFont *, unsigned revision,
                      const Config *, ShellPanel *, const ShellTimer *,
                      const Controls *, const ShellEntry *, int count, time_t now, double tick);
 int shell_panel_control(enum ShellAction);
 void shell_panel_pointer(ShellPanel *, cui_event_type, int x, int y);
 void shell_calendar_shift(ShellPanel *, int months);
-void shell_clock_resize(const ShellHost *, const Config *, ShellPanel *, int open, int active);
+void shell_clock_resize(const Config *, ShellPanel *, int open, int active);
 int shell_timer_set(ShellTimer *, int at, const char *input, char error[96]);
 int shell_timer_preset(ShellTimer *, int at, time_t value, char error[96]);
 double shell_timer_remaining(const ShellTimer *, time_t now, double tick);
-void shell_timer_notify(const Config *, int xfd);
+void shell_timer_notify(const Config *, const ShellTimer *, int xfd);
 unsigned long shell_rgb(cui_color);
 
 #endif

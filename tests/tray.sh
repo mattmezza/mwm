@@ -174,6 +174,21 @@ eventually no_panel Bluetooth
 
 wifi_id=$(icon Wi-Fi)
 bt_id=$(icon Bluetooth)
+xdotool mousemove --window "$wifi_id" 9 9 click 3
+eventually seen 'WirelessEnabled=off'
+no_panel Wi-Fi
+open Wi-Fi
+xdotool mousemove --window "$wifi_id" 9 9 click 3
+eventually seen 'WirelessEnabled=on'
+eventually no_panel Wi-Fi
+xdotool mousemove --window "$bt_id" 9 9 click 3
+eventually seen 'Powered=off'
+no_panel Bluetooth
+open Bluetooth
+xdotool mousemove --window "$bt_id" 9 9 click 3
+eventually seen 'Powered=on'
+eventually no_panel Bluetooth
+
 "$tray" -c "$dir/config.ini" notifications >"$dir/bell.log" 2>&1 &
 bell_pid=$!
 eventually icon Notifications
