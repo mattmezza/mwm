@@ -2472,7 +2472,7 @@ shell_timer_notify(const Config *config, const ShellTimer *timer, int xfd)
 		perror("mwm: timer hook");
 	}
 
-	char *const args[] = {"notify-send", "--app-name=mwm", "--icon=alarm-symbolic",
+	char *const args[] = {"notify-send", "--app-name=mwm", "--icon=alarm-symbolic", "--",
 	                      (char *)title, (char *)body, NULL};
 	if (getenv("DBUS_SESSION_BUS_ADDRESS") && has_user_bus()) {
 		/* A private X session bus may not have the desktop notification server.
