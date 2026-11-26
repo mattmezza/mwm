@@ -29,6 +29,7 @@ static const struct {
 	[TrayBluetooth] = {"bluetooth", "Bluetooth", "_MWM_BLUETOOTH_APPLET_S", "mwm-bluetooth-icon", "mwm Bluetooth"},
 	[TrayNotifications] = {"notifications", "Notifications", "_MWM_NOTIFICATIONS_APPLET_S",
 	                       "mwm-notifications-icon", "mwm Notifications"},
+	[TrayDisplays] = {"displays", "Displays", "_MWM_DISPLAYS_APPLET_S", "mwm-displays-icon", "mwm Displays"},
 };
 
 static int
@@ -98,6 +99,7 @@ read_config(Tray *tray)
 	shell_surface_free(&win->host, &win->icon_surface);
 	shell_surface_free(&win->host, &win->panel_surface);
 	shell_font_free(&win->font);
+	gboolean command_changed = strcmp(tray->config.undocked_command, next.undocked_command) != 0;
 	tray->config = next;
 	win->font = font;
 	++win->revision;
@@ -106,6 +108,8 @@ read_config(Tray *tray)
 		wifi_configure(tray);
 	else if (tray->kind == TrayBluetooth)
 		bluetooth_configure(tray);
+	else if (tray->kind == TrayDisplays)
+		displays_configure(tray, command_changed);
 	tray_changed(tray);
 	return TRUE;
 }
@@ -126,6 +130,25 @@ make_icon(Tray *tray)
 	unsigned long embed[] = {0, 1}; /* Version 0, XEMBED_MAPPED. */
 	XChangeProperty(h->dpy, win->icon, win->embed_info, win->embed_info, 32,
 	                PropModeReplace, (unsigned char *)embed, 2);
+}
+
+static void
+sync_display_icon(Tray *tray)
+{
+	TrayWindow *w = tray->window;
+	int visibility = tray->config.display_visibility;
+	gboolean visible = visibility == DisplaysAlways || (visibility == DisplaysExternal && tray->display_external);
+	if (visible && !w->icon) {
+		make_icon(tray);
+		w->dock_sent = 0;
+		dock(tray);
+	} else if (!visible && w->icon) {
+		close_panel(tray, FALSE);
+		shell_surface_free(&w->host, &w->icon_surface);
+		XDestroyWindow(w->host.dpy, w->icon);
+		w->icon = None;
+		w->icon_hover = FALSE;
+	}
 }
 
 static void
@@ -265,6 +288,8 @@ redraw(gpointer data)
 	Tray *tray = data;
 	TrayWindow *w = tray->window;
 	w->redraw_id = 0;
+	if (tray->kind == TrayDisplays)
+		sync_display_icon(tray);
 	if (w->form_generation != tray->prompt_serial) {
 		w->form_generation = tray->prompt_serial;
 		w->field_scroll = 0;
@@ -356,10 +381,12 @@ tray_popup(Tray *tray)
 	animate(tray);
 	if (tray->kind == TrayWifi && !tray->answer)
 		wifi_show(tray);
-	if (tray->kind == TrayNotifications) {
+	if (tray->kind == TrayNotifications || tray->kind == TrayDisplays)
 		v->scroll = 0;
+	if (tray->kind == TrayNotifications)
 		tray->unread = FALSE;
-	}
+	if (tray->kind == TrayDisplays)
+		displays_show(tray);
 	return TRUE;
 }
 
@@ -530,6 +557,23 @@ panel_key(Tray *tray, XKeyEvent *event)
 		set_tab(tray, !w->tab);
 		return;
 	}
+	if (tray->kind == TrayDisplays) {
+		if (key == XK_o || key == XK_O) {
+			tray_action(tray, TrayOpenEditor, NULL);
+			return;
+		}
+		if (tray->display_remaining) {
+			if (key == XK_k || key == XK_K)
+				tray_action(tray, TrayKeep, NULL);
+			else if (key == XK_r || key == XK_R)
+				tray_action(tray, TrayRevert, NULL);
+			return;
+		}
+		if (key == XK_m || key == XK_M || key == XK_i || key == XK_I) {
+			tray_action(tray, key == XK_m || key == XK_M ? TrayMirror : TrayIdentify, NULL);
+			return;
+		}
+	}
 	TrayEntry *expanded = tray_expanded(tray);
 	if (expanded) {
 		if (key == XK_Left || key == XK_BackSpace) {
@@ -602,7 +646,7 @@ panel_click(Tray *tray, XButtonEvent *event)
 		cui_rect r = hit.rect;
 		if (x < r.x || x >= r.x+r.w || y < r.y || y >= r.y+r.h)
 			continue;
-		if (event->button == Button3 && hit.kind == HitRow)
+		if (event->button == Button3 && hit.kind == HitRow && tray->kind != TrayDisplays)
 			tray_action(tray, TrayForget, hit.row);
 		if (event->button != Button1)
 			return;
@@ -620,6 +664,7 @@ panel_click(Tray *tray, XButtonEvent *event)
 		case HitCancel: answer(tray, FALSE); break;
 		case HitClear: tray_action(tray, TrayClear, NULL); break;
 		case HitBack: g_clear_pointer(&w->expanded, g_free); break;
+		case HitDisplayAction: tray_action(tray, hit.value, NULL); break;
 		}
 		tray_changed(tray);
 		return;
@@ -725,6 +770,8 @@ housekeeping(gpointer data)
 	Tray *tray = data;
 	TrayWindow *v = tray->window;
 	dock(tray);
+	if (tray->kind == TrayDisplays)
+		displays_tick(tray);
 	int composited = shell_composited(&v->host);
 	if (v->host.composited != composited) {
 		v->host.composited = composited;
@@ -779,7 +826,7 @@ main(int argc, char **argv)
 			if (!strcmp(argv[first], applets[i].command))
 				kind = i;
 	if (!win.config_path || kind == TrayKindCount) {
-		fputs("usage: mwm-tray [-c config.ini] wifi|bluetooth|notifications\n", stderr);
+		fputs("usage: mwm-tray [-c config.ini] wifi|bluetooth|notifications|displays\n", stderr);
 		return EXIT_FAILURE;
 	}
 	Tray tray = {.window = &win, .kind = kind};
@@ -822,7 +869,8 @@ main(int argc, char **argv)
 	win.paste = XInternAtom(dpy, "_MWM_TRAY_PASTE", False);
 	if (!read_config(&tray))
 		return EXIT_FAILURE;
-	make_icon(&tray);
+	if (kind != TrayDisplays)
+		make_icon(&tray);
 	XGrabServer(dpy);
 	Window other = XGetSelectionOwner(dpy, win.instance);
 	if (!other) {
@@ -836,7 +884,8 @@ main(int argc, char **argv)
 	}
 	XSelectInput(dpy, h->root, StructureNotifyMask | PropertyChangeMask);
 	win.im = XOpenIM(dpy, NULL, NULL, NULL);
-	tray_model(&tray, "Connecting…", kind == TrayNotifications ? "Waiting for nod" : "Waiting for the system service");
+	tray_model(&tray, "Connecting…", kind == TrayNotifications ? "Waiting for nod" :
+	           kind == TrayDisplays ? "" : "Waiting for the system service");
 	tray_bus_start(&tray);
 	win.loop = g_main_loop_new(NULL, FALSE);
 	g_unix_fd_add(ConnectionNumber(dpy), G_IO_IN | G_IO_HUP | G_IO_ERR, window_events, &tray);
@@ -846,6 +895,8 @@ main(int argc, char **argv)
 	g_timeout_add_seconds(1, housekeeping, &tray);
 	dock(&tray);
 	g_main_loop_run(win.loop);
+	if (kind == TrayDisplays)
+		displays_stop(&tray);
 	close_panel(&tray, TRUE);
 	shell_popup_exit_reset(h, &win.exit);
 	shell_surface_free(h, &win.icon_surface);

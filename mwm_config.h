@@ -9,6 +9,8 @@ enum { MAX_TAGS = 100, MAX_RULES = 64, MAX_ZONES = 8, MAX_TIMER_PRESETS = 24, CO
 enum { MAX_USAGE_SAMPLES = 120, MAX_USAGE_WIDTH = 200 };
 enum { SYSTEM_INTERVAL_MIN = 125, SYSTEM_INTERVAL_MAX = 5000 };
 enum { UsageWarning, UsageDanger, UsageColorCount };
+enum { DisplaysExternal, DisplaysAlways, DisplaysNever };
+enum { DisplayRow = 1, DisplayColumn = 2, DisplayTwoAbove = 4 };
 enum { SchemeNorm, SchemeSel, SchemeUrg, SchemeTitle, SchemeStatus, SchemeBar, SchemeLast };
 enum { ColFg, ColBg, ColBorder };
 enum BarItem { BarTags, BarLayout, BarTitle, BarStatus, BarCpu, BarGpu, BarRam, BarLoad, BarNetwork, BarDisk, BarDate, BarTime,
@@ -52,6 +54,8 @@ typedef struct {
 	int showsystray, showtraybar, systraymon, systrayspacing, systrayvertpad, notificationslast;
 	int applet_width, applet_rows, wifi_secret_agent, bluetooth_default_agent;
 	char wifi_interface[64], bluetooth_adapter[64];
+	int display_visibility, display_quick_presets, display_saved_presets, display_mirror, display_identify;
+	char undocked_command[512];
 	int panelradius, panel_opacity, calendar_width, clock_width, palette_width;
 	int duration, reduced_motion, shadows, shadow_opacity, bar_shadow_blur, panel_shadow_blur;
 	int popup_enter, popup_exit, popup_distance;

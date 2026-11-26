@@ -30,6 +30,11 @@ static const char *glyphs[GlyphCount] = {
 	[GlyphBell] = "<path d='M10 20a2 2 0 0 0 4 0M18 9a6 6 0 0 0-12 0c0 4.5-1 6-2 7.5h16C19 15 18 13.5 18 9Z'/>",
 	[GlyphBellOff] = "<path d='m3 3 18 18m-11-1a2 2 0 0 0 4 0M6.4 7A6 6 0 0 0 6 9c0 4.5-1 6-2 7.5h12.5M10.2 3.3A6 6 0 0 1 18 9c0 2 .2 3.5.6 4.7'/>",
 	[GlyphClose] = "<path d='m6 6 12 12M18 6 6 18'/>",
+	/* Undocked's display and arrangement artwork. See LICENSE.heroicons. */
+	[GlyphMonitor] = "<path d='M9 17.25v1.007a3 3 0 0 1-.879 2.122L7.5 21h9l-.621-.621A3 3 0 0 1 15 18.257V17.25m6-12V15a2.25 2.25 0 0 1-2.25 2.25H5.25A2.25 2.25 0 0 1 3 15V5.25m18 0A2.25 2.25 0 0 0 18.75 3H5.25A2.25 2.25 0 0 0 3 5.25m18 0V12a2.25 2.25 0 0 1-2.25 2.25H5.25A2.25 2.25 0 0 1 3 12V5.25'/>",
+	[GlyphDisplayRow] = "<rect x='3' y='4.5' width='18' height='15' rx='1.125'/><path d='M9 4.5v15m6-15v15'/>",
+	[GlyphDisplayColumn] = "<rect x='4.5' y='3' width='15' height='18' rx='1.125'/><path d='M4.5 9h15m-15 6h15'/>",
+	[GlyphDisplayTwoAbove] = "<rect x='2.5' y='3.5' width='8' height='6.5' rx='1.1'/><rect x='13.5' y='3.5' width='8' height='6.5' rx='1.1'/><rect x='8' y='13.5' width='8' height='6.5' rx='1.1'/>",
 };
 
 static void
@@ -71,6 +76,8 @@ main_icon(const Tray *tray)
 		return tray->enabled ? GlyphBluetooth : GlyphBluetoothOff;
 	if (tray->kind == TrayNotifications)
 		return tray->enabled ? GlyphBellOff : GlyphBell;
+	if (tray->kind == TrayDisplays)
+		return GlyphMonitor;
 	return tray->enabled ? signal_icon(tray->strength) : GlyphWifiOff;
 }
 
@@ -158,7 +165,16 @@ tray_expanded(Tray *tray)
 }
 
 enum { Header = 85, Footer = 35, RowSpacing = 44,
-       NotifyHeader = 74, NotifyToolbar = 34, NotifyRow = 74, NotifyFooter = 28 };
+       NotifyHeader = 74, NotifyToolbar = 34, NotifyRow = 74, NotifyFooter = 28,
+       DisplayHeader = 66, DisplayToolbar = 40, DisplayFooter = 65 };
+
+static gboolean
+display_toolbar(const Tray *tray)
+{
+	return tray->display_remaining ||
+	       ((tray->config.display_mirror && tray->display_arrangeable > 1) ||
+	        (tray->config.display_identify && tray->display_count));
+}
 
 int
 tray_ui_height(Tray *tray, int available)
@@ -178,6 +194,12 @@ tray_ui_height(Tray *tray, int available)
 		int content = tray_expanded(tray) ? CLAMP((int)ceilf(win->detail_bounds.h)+4, NotifyRow, 4*NotifyRow)
 		                                  : MAX(1, win->visible_rows)*NotifyRow;
 		return MIN(available, chrome+content);
+	}
+	if (tray->kind == TrayDisplays) {
+		int chrome = DisplayHeader + DisplayFooter + (display_toolbar(tray) ? DisplayToolbar : 0);
+		int content = tray->display_remaining || !tray->available ? 0 : MAX(1, tray_row_count(tray));
+		win->visible_rows = MIN(MIN(MAX(0, (available-chrome)/RowSpacing), tray->config.applet_rows), content);
+		return MIN(available, chrome + win->visible_rows * RowSpacing);
 	}
 	int toolbar = tray->kind == TrayWifi ? 75 : 41;
 	int rows = MAX(1, (available-Header-Footer-toolbar)/RowSpacing);
@@ -240,7 +262,9 @@ list_row(Drawing *d, TrayEntry *entry, int id, int index, cui_rect r, gboolean e
 	static const int entry_icons[] = {
 		[TrayDevice] = GlyphDevice, [TrayVpn] = GlyphVpn, [TrayHeadphones] = GlyphHeadphones,
 		[TrayKeyboard] = GlyphKeyboard, [TrayMouse] = GlyphMouse, [TrayComputer] = GlyphComputer,
-		[TrayGamepad] = GlyphGamepad,
+		[TrayGamepad] = GlyphGamepad, [TrayMonitor] = GlyphMonitor,
+		[TrayDisplayRow] = GlyphDisplayRow, [TrayDisplayColumn] = GlyphDisplayColumn,
+		[TrayDisplayTwoAbove] = GlyphDisplayTwoAbove,
 	};
 	int which = entry->icon == TraySignal ? signal_icon(entry->strength) : entry_icons[entry->icon];
 	glyph(d->win, d->ui, id+1, r.x+9, r.y+9, 20, which, entry->active || hover ? d->accent : d->muted);
@@ -318,6 +342,58 @@ list_panel(Tray *tray, Drawing *d, int x, int y, int w)
 		snprintf(footer, sizeof footer, "%d–%d of %d  ·  Scroll for more", v->scroll+1, v->scroll+v->visible_rows, total);
 	text_at(d, 130, (cui_rect){x, v->pad+v->height-Footer, w, Footer-4}, status,
 	        tray->failed ? d->danger : d->muted, d->size-4, regular, CUI_ALIGN_START);
+}
+
+static void
+displays_panel(Tray *tray, Drawing *d, int x, int y, int w)
+{
+	TrayWindow *v = d->win;
+	glyph(v, d->ui, 600, x+8, y+20, 24, GlyphMonitor, d->accent);
+	text_at(d, 601, (cui_rect){x+52, y+9, w-52, 25}, v->title, d->fg, d->size+1, medium, CUI_ALIGN_START);
+	text_at(d, 602, (cui_rect){x+52, y+34, w-52, 21}, tray->headline, d->muted, d->size-3, regular, CUI_ALIGN_START);
+	y += DisplayHeader;
+	box(d->ui, 603, (cui_rect){x, y-5, w, 1}, 0, d->line, transparent, 0);
+
+	gboolean ready = tray->available && !tray->busy;
+	int half = (w-8)/2;
+	if (tray->display_remaining) {
+		button(d, 604, (cui_rect){x, y, half, 31}, "Revert", HitDisplayAction, TrayRevert, FALSE, ready);
+		button(d, 606, (cui_rect){x+half+8, y, w-half-8, 31}, "Keep layout", HitDisplayAction, TrayKeep, TRUE, ready);
+	} else if (display_toolbar(tray)) {
+		gboolean mirror = tray->config.display_mirror && tray->display_arrangeable > 1;
+		gboolean identify = tray->config.display_identify && tray->display_count;
+		if (mirror)
+			button(d, 604, (cui_rect){x, y, identify ? half : w, 31},
+			       tray->display_mirrored ? "Extend" : "Mirror", HitDisplayAction, TrayMirror, FALSE, ready);
+		if (identify)
+			button(d, 606, (cui_rect){x+(mirror ? half+8 : 0), y, mirror ? w-half-8 : w, 31},
+			       "Identify", HitDisplayAction, TrayIdentify, FALSE, ready);
+	}
+	if (display_toolbar(tray))
+		y += DisplayToolbar;
+	int total = tray_row_count(tray);
+	v->scroll = CLAMP(v->scroll, 0, MAX(0, total-v->visible_rows));
+	if (!tray->display_remaining) {
+		for (int i = 0; i < v->visible_rows; ++i) {
+			int index = v->scroll+i;
+			TrayEntry *row = tray_row(tray, index);
+			if (row)
+				list_row(d, row, 640+i*8, index, (cui_rect){x, y+i*RowSpacing, w, 39}, ready);
+		}
+		if (v->visible_rows && !total)
+			text_at(d, 608, (cui_rect){x, y, w, 38}, "No presets for these displays",
+			        d->muted, d->size-3, regular, CUI_ALIGN_CENTER);
+	}
+	char status[96] = "";
+	if (tray->display_remaining)
+		snprintf(status, sizeof status, "Reverts in %d s", tray->display_remaining);
+	else if (v->visible_rows && total > v->visible_rows)
+		snprintf(status, sizeof status, "%d–%d of %d  ·  Scroll for more", v->scroll+1, v->scroll+v->visible_rows, total);
+	const char *message = tray->message && *tray->message ? tray->message : status;
+	int footer = v->pad+v->height-DisplayFooter;
+	text_at(d, 609, (cui_rect){x, footer, w, 20}, message,
+	        tray->failed ? d->danger : d->muted, d->size-4, regular, CUI_ALIGN_START);
+	button(d, 610, (cui_rect){x, footer+22, w, 31}, "Open Undocked", HitDisplayAction, TrayOpenEditor, FALSE, !tray->busy);
 }
 
 static void
@@ -502,6 +578,8 @@ tray_ui_panel(Tray *tray)
 		prompt_panel(tray, &d, v->pad+margin, v->pad, v->width-2*margin);
 	else if (tray->kind == TrayNotifications)
 		notifications_panel(tray, &d, v->pad+margin, v->pad, v->width-2*margin);
+	else if (tray->kind == TrayDisplays)
+		displays_panel(tray, &d, v->pad+margin, v->pad, v->width-2*margin);
 	else
 		list_panel(tray, &d, v->pad+margin, v->pad, v->width-2*margin);
 	shell_surface_draw(&v->host, &v->panel_surface, v->panel, &body, c->panelradius, v->pad);

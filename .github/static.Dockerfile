@@ -5,7 +5,7 @@ RUN apk add --no-cache \
     libx11-dev libx11-static libxext-dev libxext-static libxrender-dev libxinerama-dev \
     libxcb-static libxau-dev libxdmcp-dev fontconfig-dev fontconfig-static \
     freetype-dev freetype-static harfbuzz-dev libpng-static brotli-static expat-static \
-    bzip2-static zlib-static glib-static pcre2-static util-linux-static \
+    bzip2-static zlib-static glib-static pcre2-static util-linux-static cjson-dev cjson-static \
     font-dejavu tzdata xauth xprop xvfb-run xwininfo
 
 # Alpine ships Xau as a shared library. Build the same release as an archive.

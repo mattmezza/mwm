@@ -6,9 +6,11 @@
 
 #define PROPERTIES "org.freedesktop.DBus.Properties"
 
-enum TrayKind { TrayWifi, TrayBluetooth, TrayNotifications, TrayKindCount };
-enum TrayAction { TrayToggle, TrayScan, TrayRow, TrayForget, TrayHidden, TrayVisible, TrayClear };
-enum TrayIcon { TraySignal, TrayDevice, TrayVpn, TrayHeadphones, TrayKeyboard, TrayMouse, TrayComputer, TrayGamepad, TrayIconCount };
+enum TrayKind { TrayWifi, TrayBluetooth, TrayNotifications, TrayDisplays, TrayKindCount };
+enum TrayAction { TrayToggle, TrayScan, TrayRow, TrayForget, TrayHidden, TrayVisible, TrayClear,
+                  TrayOpenEditor, TrayMirror, TrayIdentify, TrayKeep, TrayRevert };
+enum TrayIcon { TraySignal, TrayDevice, TrayVpn, TrayHeadphones, TrayKeyboard, TrayMouse, TrayComputer, TrayGamepad,
+                TrayMonitor, TrayDisplayRow, TrayDisplayColumn, TrayDisplayTwoAbove, TrayIconCount };
 
 typedef struct {
 	char *id, *label, *detail, *body;
@@ -44,6 +46,8 @@ struct Tray {
 	gboolean connected, available, enabled, scanning, can_scan, discoverable, busy;
 	gboolean unread, history_available;
 	int strength;
+	gboolean display_external, display_mirrored;
+	int display_count, display_arrangeable, display_remaining;
 	char *headline, *subtitle, *message;
 	gboolean failed;
 	GPtrArray *rows;
@@ -93,5 +97,11 @@ void bluetooth_action(Tray *, enum TrayAction, const char *);
 void bluetooth_configure(Tray *);
 void nod_start(Tray *);
 void nod_action(Tray *, enum TrayAction, const char *);
+void displays_start(Tray *);
+void displays_stop(Tray *);
+void displays_configure(Tray *, gboolean command_changed);
+void displays_show(Tray *);
+void displays_tick(Tray *);
+void displays_action(Tray *, enum TrayAction, const char *);
 
 #endif

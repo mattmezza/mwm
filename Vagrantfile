@@ -21,7 +21,7 @@ Vagrant.configure("2") do |config|
     echo "Installing development dependencies..."
     pacman -Syu --noconfirm
     pacman -S --noconfirm base-devel git zsh neovim xorg-server xorg-xinit openssh nodejs npm \
-      libx11 libxrender libxinerama libxext fontconfig freetype2 harfbuzz cmake python libnotify \
+      libx11 libxrender libxinerama libxext fontconfig freetype2 harfbuzz cmake python libnotify cjson \
       xorg-xrandr arandr xorg-xprop xorg-xsetroot xterm sxhkd picom dmenu ttf-dejavu \
       spice-vdagent
 

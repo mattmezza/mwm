@@ -49,6 +49,8 @@ Geist and Geist Mono with an Xresources palette and a Runware-generated Alpine w
   Wi-Fi and VPN credentials, and Bluetooth pairing prompts.
 - **nod notification applet** with recent notifications, unread indication,
   and Do Not Disturb controls.
+- **Undocked displays applet** with mirror mode, quick layouts, saved presets
+  and a shortcut to the display editor.
 - **Command palette** for finding windows, jumping to tags, and changing layouts.
 - **Status from the X11 root window name**, compatible with slstatus.
   `^c#RRGGBB^` changes the current text color and `^d^` restores it.
@@ -95,6 +97,7 @@ and standard utilities including `awk`, `sha256sum`, and `mktemp`.
 | Wi-Fi and VPN applet | NetworkManager on the system D-Bus, plus the NetworkManager plugin for each VPN protocol you use. Profiles with user-agent credentials also need `secret-tool` (usually from libsecret) and a Secret Service keyring on the session bus. |
 | Bluetooth applet | BlueZ (`bluetoothd`) on the system D-Bus and a Bluetooth adapter. |
 | Notifications applet | nod on the same X screen and session D-Bus. Recent history and native tray replacement require nod v0.2.0 or later. [nod releases](https://github.com/mattmezza/nod/releases) |
+| Displays applet | [Undocked](https://github.com/mattmezza/undocked) on the same X display. |
 | Timer alerts | `notify-send` (usually from libnotify) and a notification daemon such as nod, or your configured timer hook. |
 | Volume | `wpctl` from WirePlumber and a running PipeWire audio session. |
 | Brightness | A Linux backlight device. Changing brightness needs `brightnessctl` and permission to control the device. |
@@ -104,7 +107,7 @@ and standard utilities including `awk`, `sha256sum`, and `mktemp`.
 ## Build from source
 
 Build dependencies include a C11 compiler, make, CMake, Python 3, pkg-config,
-curl, X11, Xext, Xrender, Fontconfig, FreeType, HarfBuzz, GLib/GIO, and optional Xinerama.
+curl, X11, Xext, Xrender, Fontconfig, FreeType, HarfBuzz, GLib/GIO, cJSON, and optional Xinerama.
 The first build fetches a pinned [CUI](https://github.com/mattmezza/cui) revision.
 The renderer runs inside the existing X11 host.
 
@@ -358,6 +361,31 @@ over nod's tray slot while running and nod restores its own icon when the
 applet exits. The list uses the same `[applets]` width and row settings as
 the other panels. Older nod builds still support Do Not Disturb in the
 applet. [nod](https://github.com/mattmezza/nod)
+
+### Displays
+
+With Undocked installed, start the MWM applet from your X session startup script.
+
+```sh
+mwm-tray displays &
+```
+
+Click the monitor icon to mirror or extend the desktop, identify displays,
+or apply a quick layout or a matching saved preset. After a layout change,
+choose **Keep layout** or **Revert** in the panel. Undocked restores the
+previous layout if its confirmation timer expires. **Open Undocked** opens the
+editor for arranging displays, changing modes and managing presets.
+
+Under `[applets]`, set `display_visibility` to `external` (the default),
+`always` or `never`. Undocked reports which connected outputs are external.
+The panel shares the other applets' width and row settings. Use
+`display_quick_presets`, `display_saved_presets`, `display_mirror` and
+`display_identify` to choose which actions appear. Set `undocked_command` to
+override the executable. Apply changes with `mwmc reload`.
+
+Use arrows and Enter to apply a preset, M to mirror or extend, I to identify,
+O to open the editor, or Escape to dismiss the panel. During confirmation,
+use K to keep the layout or R to revert it.
 
 ### Bar segments
 

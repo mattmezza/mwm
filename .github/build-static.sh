@@ -12,7 +12,7 @@ test "$(uname -m)" = "$arch"
 
 libs=$(pkg-config --static --libs x11 xext xrender xinerama fontconfig freetype2 harfbuzz)
 x11_libs=$(pkg-config --static --libs x11)
-tray_libs=$(pkg-config --static --libs gio-2.0)
+tray_libs=$(pkg-config --static --libs gio-2.0 libcjson)
 make -j4 VERSION="$version" LDFLAGS=-static \
     LIBS="-Wl,--start-group $libs -Wl,--end-group" \
     X11_LIBS="$x11_libs" TRAY_LIBS="-Wl,--start-group $tray_libs -leconf -Wl,--end-group"
@@ -32,3 +32,5 @@ xvfb-run -a -s '-screen 0 1280x720x24' \
     sh tests/restart.sh "dist/mwm-linux-$arch" "dist/mwmc-linux-$arch"
 xvfb-run -a -s '-screen 0 1280x720x24' dbus-run-session -- \
     sh tests/tray.sh "dist/mwm-linux-$arch" "dist/mwmc-linux-$arch" "dist/mwm-tray-linux-$arch"
+xvfb-run -a -s '-screen 0 1280x720x24' \
+    python3 tests/displays.py "dist/mwm-linux-$arch" "dist/mwmc-linux-$arch" "dist/mwm-tray-linux-$arch"

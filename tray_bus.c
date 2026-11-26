@@ -243,6 +243,10 @@ tray_bus_start(Tray *tray)
 		nod_start(tray);
 		return;
 	}
+	if (tray->kind == TrayDisplays) {
+		displays_start(tray);
+		return;
+	}
 	tray->service = tray->kind == TrayWifi ? "org.freedesktop.NetworkManager" : "org.bluez";
 	tray->manager_path = tray->kind == TrayWifi ? "/org/freedesktop" : "/";
 	g_dbus_object_manager_client_new_for_bus(G_BUS_TYPE_SYSTEM, G_DBUS_OBJECT_MANAGER_CLIENT_FLAGS_DO_NOT_AUTO_START,
@@ -314,6 +318,8 @@ tray_action(Tray *tray, enum TrayAction action, const char *id)
 		wifi_action(tray, action, id);
 	else if (tray->kind == TrayBluetooth)
 		bluetooth_action(tray, action, id);
+	else if (tray->kind == TrayDisplays)
+		displays_action(tray, action, id);
 	else
 		nod_action(tray, action, id);
 }

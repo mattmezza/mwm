@@ -5,7 +5,7 @@
 #include "cui/cui_icon.h"
 
 enum TrayHitKind { HitRadio, HitScan, HitRow, HitForget, HitField, HitAccept, HitCancel, HitWifi,
-                 HitVpn, HitHidden, HitVisible, HitClear, HitBack };
+                 HitVpn, HitHidden, HitVisible, HitClear, HitBack, HitDisplayAction };
 typedef struct {
 	cui_rect rect;
 	enum TrayHitKind kind;
@@ -17,7 +17,8 @@ enum {
 	GlyphWifi0, GlyphWifi1, GlyphWifi2, GlyphWifi3, GlyphWifi4, GlyphWifiOff,
 	GlyphBluetooth, GlyphBluetoothOff, GlyphDevice, GlyphVpn, GlyphLock, GlyphRefresh,
 	GlyphForget, GlyphHeadphones, GlyphKeyboard, GlyphMouse, GlyphComputer, GlyphGamepad,
-	GlyphBell, GlyphBellOff, GlyphClose, GlyphCount,
+	GlyphBell, GlyphBellOff, GlyphClose,
+	GlyphMonitor, GlyphDisplayRow, GlyphDisplayColumn, GlyphDisplayTwoAbove, GlyphCount,
 };
 
 typedef struct {

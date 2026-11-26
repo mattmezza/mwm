@@ -48,6 +48,8 @@ config_defaults(Config *c)
 		.showsystray = 1, .showtraybar = 1, .systraymon = -1, .systrayspacing = 7, .systrayvertpad = 6,
 		.notificationslast = 1,
 		.applet_width = 386, .applet_rows = 6, .wifi_secret_agent = 1, .bluetooth_default_agent = 1,
+		.display_visibility = DisplaysExternal, .display_quick_presets = DisplayRow | DisplayColumn | DisplayTwoAbove,
+		.display_saved_presets = 1, .display_mirror = 1, .display_identify = 1, .undocked_command = "undocked",
 		.panelradius = 6, .panel_opacity = 255, .calendar_width = 394, .clock_width = 448, .palette_width = 530,
 		.duration = 150, .shadows = 1, .shadow_opacity = 112, .bar_shadow_blur = 2, .panel_shadow_blur = 6,
 		.popup_enter = 145, .popup_exit = 100, .popup_distance = 14,
@@ -139,6 +141,12 @@ static const Setting settings[] = {
 	STR("applets", "wifi_interface", wifi_interface), STR("applets", "bluetooth_adapter", bluetooth_adapter),
 	INT("applets", "wifi_secret_agent", wifi_secret_agent, 0, 1),
 	INT("applets", "bluetooth_default_agent", bluetooth_default_agent, 0, 1),
+	INT("applets", "display_visibility", display_visibility, DisplaysExternal, DisplaysNever),
+	INT("applets", "display_quick_presets", display_quick_presets, 0, DisplayRow | DisplayColumn | DisplayTwoAbove),
+	INT("applets", "display_saved_presets", display_saved_presets, 0, 1),
+	INT("applets", "display_mirror", display_mirror, 0, 1),
+	INT("applets", "display_identify", display_identify, 0, 1),
+	STR("applets", "undocked_command", undocked_command),
 	INT("panels", "radius", panelradius, 0, 32),
 	INT("panels", "opacity", panel_opacity, 0, 255),
 	INT("panels", "calendar_width", calendar_width, 300, 900),
@@ -192,6 +200,30 @@ copy_value(char *dest, size_t length, const char *value)
 	return 1;
 }
 
+static char *trim(char *);
+
+static int
+read_display_presets(const char *value, int *out)
+{
+	char list[64];
+	if (!copy_value(list, sizeof list, value))
+		return 0;
+	int mask = 0;
+	if (*list) {
+		char *next = list, *name;
+		while ((name = strsep(&next, ","))) {
+			name = trim(name);
+			int bit = !strcmp(name, "row") ? DisplayRow : !strcmp(name, "column") ? DisplayColumn :
+			          !strcmp(name, "y") ? DisplayTwoAbove : 0;
+			if (!bit || (mask & bit))
+				return 0;
+			mask |= bit;
+		}
+	}
+	*out = mask;
+	return 1;
+}
+
 static int
 setting(Config *c, const Setting *s, const char *value)
 {
@@ -210,6 +242,19 @@ setting(Config *c, const Setting *s, const char *value)
 	}
 	if (s->offset == offsetof(Config, barfontsize) && strcmp(value, "0"))
 		return integer(value, 9, 28, dest);
+	if (s->offset == offsetof(Config, display_visibility)) {
+		static const char *names[] = {[DisplaysExternal] = "external", [DisplaysAlways] = "always",
+		                              [DisplaysNever] = "never"};
+		for (size_t i = 0; i < COUNT(names); ++i) {
+			if (!strcmp(value, names[i])) {
+				*(int *)dest = i;
+				return 1;
+			}
+		}
+		return 0;
+	}
+	if (s->offset == offsetof(Config, display_quick_presets))
+		return read_display_presets(value, dest);
 	if (s->min == 0 && s->max == 1) {
 		if (!strcmp(value, "true") || !strcmp(value, "false")) {
 			*(int *)dest = !strcmp(value, "true");
