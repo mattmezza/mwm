@@ -236,6 +236,7 @@ The default config assigns tag 1 to monitor 0. Set `1 = -1` under
   it for the previous one.
 - The system segment shows CPU, GPU, and RAM history, three load averages,
   mirrored download and upload traffic, and separate disk read and write histories.
+  CPU and GPU charts show temperatures in °C when Linux exposes the sensors.
   GPU readings use AMD busy percentage or Intel i915 active time when available.
   Hover over a metric to see its reading and the shared
   update interval. Scroll up for faster sampling or down for slower sampling,

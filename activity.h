@@ -15,8 +15,15 @@ typedef struct {
 } Traffic;
 
 typedef struct {
+	char path[256];
+	int millidegrees;
+	double probe;
+} Temperature;
+
+typedef struct {
 	Traffic network, disk;
-	char gpu_path[256];
+	Temperature cpu_temperature, gpu_temperature;
+	char gpu_path[256], gpu_card[32];
 	int gpu_kind;
 	uint64_t gpu_previous;
 	double gpu_tick, gpu_probe;

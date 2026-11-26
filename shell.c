@@ -934,7 +934,7 @@ bar_layout(Frame *f, cui_rect r, int layout, cui_color accent)
 	hit(f, r, ActLayout, 0);
 }
 
-enum { GroupPadding = 8, GroupGap = 9, SystemGap = 5, UsageIconSize = 18, LoadMinWidth = 18 };
+enum { GroupPadding = 8, GroupGap = 9, SystemGap = 5, UsageIconSize = 18, UsageMinWidth = 16, LoadMinWidth = 18 };
 static const char *metric_name[MetricControl] = {
 	[UsageCpu] = "CPU utilization", [UsageGpu] = "GPU utilization", [UsageRam] = "RAM utilization",
 	[MetricLoad] = "Load average", [MetricNetwork] = "Network activity", [MetricDisk] = "Disk activity",
@@ -944,6 +944,25 @@ static const cui_chart_datum *
 latest_usage(const ShellUsage *usage)
 {
 	return usage->count ? &usage->history[usage->count-1] : NULL;
+}
+
+static const Temperature *
+usage_temperature(const ShellSystem *system, int metric)
+{
+	if (metric == UsageCpu)
+		return &system->activity.cpu_temperature;
+	if (metric == UsageGpu)
+		return &system->activity.gpu_temperature;
+	return NULL;
+}
+
+static int
+bar_temperature(const Frame *f, const Temperature *sensor, char *text, size_t size)
+{
+	if (!sensor || !sensor->path[0])
+		return 0;
+	snprintf(text, size, "%d°C", (int)round(sensor->millidegrees / 1000.0));
+	return MAX(textwidth(f, "000°C", f->size, mono), textwidth(f, text, f->size, mono));
 }
 
 static cui_color
@@ -991,8 +1010,8 @@ level_icon(Frame *f, int id, cui_rect r, enum Control kind, const ControlReading
 }
 
 static void
-bar_usage(Frame *f, ShellUsageChart *chart, const ShellUsage *usage, int kind, int history,
-          cui_rect r, cui_color fg, cui_color accent)
+bar_usage(Frame *f, ShellUsageChart *chart, const ShellUsage *usage, const Temperature *sensor,
+          int kind, int history, cui_rect r, cui_color fg, cui_color accent)
 {
 	int id = 60 + kind*8;
 	cui_rect symbol = {r.x, r.y + ((int)r.h-UsageIconSize)/2, UsageIconSize, UsageIconSize};
@@ -1000,7 +1019,14 @@ bar_usage(Frame *f, ShellUsageChart *chart, const ShellUsage *usage, int kind, i
 
 	int left = r.x + UsageIconSize + SystemGap;
 	int width = (int)(r.x + r.w) - left;
-	if (width < 16)
+	char temperature[24];
+	int temperature_width = bar_temperature(f, sensor, temperature, sizeof temperature);
+	if (temperature_width && width >= UsageMinWidth + SystemGap + temperature_width) {
+		cui_rect value = {r.x+r.w-temperature_width, r.y, temperature_width, r.h};
+		label(f, id+1, value, temperature, fg, f->size, mono, CUI_ALIGN_END);
+		width -= SystemGap + temperature_width;
+	}
+	if (width < UsageMinWidth)
 		return;
 	int height = MIN(USAGE_CHART_HEIGHT, (int)r.h - 8);
 	int top = r.y + (int)(r.h - height)/2;
@@ -1277,7 +1303,8 @@ bar_item_draw(Frame *f, ShellBar *bar, const ShellBarModel *m, enum BarItem kind
 		int metric = kind - BarCpu;
 		int history[] = {c->cpu_history, c->gpu_history, c->ram_history};
 		bar->metrics[metric] = group_rect(f, r);
-		bar_usage(f, &bar->usage_charts[metric], &m->system->usage[metric], metric, history[metric], r, fg, accent);
+		bar_usage(f, &bar->usage_charts[metric], &m->system->usage[metric], usage_temperature(m->system, metric),
+		          metric, history[metric], r, fg, accent);
 		break;
 	}
 	case BarLoad:
@@ -1382,6 +1409,12 @@ shell_bar_draw(const ShellHost *host, const ShellFont *font, unsigned revision,
 		[BarVolume] = {24, 24, 0},
 		[BarBrightness] = {24, 24, 0},
 	};
+	for (int metric = UsageCpu; metric <= UsageGpu; ++metric) {
+		char temperature[24];
+		int width = bar_temperature(&f, usage_temperature(m->system, metric), temperature, sizeof temperature);
+		if (width)
+			sizes[BarCpu+metric].wanted += SystemGap + width;
+	}
 	unsigned inactive = (!m->title[0] ? 1u<<BarTitle : 0) | (!m->status[0] ? 1u<<BarStatus : 0) |
 	                    (!m->tray_shown ? 1u<<BarTray : 0);
 	ItemSize current[BarItemCount];
@@ -1554,6 +1587,10 @@ shell_tooltip_draw(const ShellHost *host, const ShellFont *font, unsigned revisi
 	const Traffic *traffic = metric == MetricNetwork ? &system->activity.network
 	                         : metric == MetricDisk ? &system->activity.disk : NULL;
 	const ControlReading *reading = kind >= 0 ? &controls->reading[kind] : NULL;
+	const Temperature *sensor = usage_temperature(system, metric);
+	char temperature[24] = "Unavailable";
+	if (sensor && sensor->path[0])
+		snprintf(temperature, sizeof temperature, "%.1f °C", sensor->millidegrees / 1000.0);
 	float size = fmaxf(11, font->size - 3);
 	Frame f = {.font = font, .config = c, .composite = host->composited, .size = size};
 	int pad = host->composited && c->shadows && c->shadow_opacity ? 4*c->bar_shadow_blur : 0;
@@ -1566,7 +1603,10 @@ shell_tooltip_draw(const ShellHost *host, const ShellFont *font, unsigned revisi
 	if (!reading)
 		width = MAX(width, textwidth(&f, "Update interval", size-2, regular) +
 		            textwidth(&f, "60000 ms", size-2, mono) + 2*padding + 14);
-	int rows = load || traffic ? 3 : 1;
+	if (sensor)
+		width = MAX(width, textwidth(&f, "Temperature", size-1, regular) +
+		            textwidth(&f, temperature, size, mono) + 2*padding + 14);
+	int rows = load || traffic ? 3 : 1 + (sensor != NULL);
 	int height = (rows + !reading)*row + 12;
 	int w = width + 2*pad, h = height + 2*pad;
 	if (w > monitor.w || h + anchor.h + gap > monitor.h) {
@@ -1651,6 +1691,11 @@ shell_tooltip_draw(const ShellHost *host, const ShellFont *font, unsigned revisi
 			snprintf(text, sizeof text, "Unavailable");
 		label(&f, 3, (cui_rect){pad+padding, pad+6, inner, row}, text,
 		      latest ? usage_color(c, accent, latest->value) : muted, size, mono, CUI_ALIGN_END);
+	}
+	if (sensor) {
+		cui_rect line = {pad+padding, pad+6+row, inner, row};
+		label(&f, 4, line, "Temperature", muted, size-1, regular, CUI_ALIGN_START);
+		label(&f, 5, line, temperature, sensor->path[0] ? fg : muted, size, mono, CUI_ALIGN_END);
 	}
 	if (!reading) {
 		char interval[24];
