@@ -54,6 +54,7 @@ config_defaults(Config *c)
 		.animations = 1, .duration = 150, .shadows = 1, .shadow_opacity = 112, .bar_shadow_blur = 2, .panel_shadow_blur = 6,
 		.popup_enter = 145, .popup_exit = 100, .popup_distance = 14,
 		.tag_slide = 1, .tag_slide_duration = 195, .tag_slide_easing = TagSlideEaseOut,
+		.tag_monitor_slide = 1,
 		.window_enter = 1, .window_exit = 1, .window_reflow = 1, .window_tag_slide = 1,
 		.font = "Geist:pixelsize=18", .monofont = "Geist Mono",
 		.colors = {
@@ -159,6 +160,7 @@ static const Setting settings[] = {
 	INT("motion", "popup_enter", popup_enter, 0, 500), INT("motion", "popup_exit", popup_exit, 0, 500),
 	INT("motion", "popup_distance", popup_distance, 0, 48),
 	INT("motion", "tag_slide", tag_slide, 0, 1),
+	INT("motion", "tag_monitor_slide", tag_monitor_slide, 0, 1),
 	INT("motion", "tag_slide_duration", tag_slide_duration, 0, 500),
 	INT("motion", "window_enter", window_enter, 0, 1),
 	INT("motion", "window_exit", window_exit, 0, 1),

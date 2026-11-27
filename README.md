@@ -334,12 +334,18 @@ Under `[motion]`, `tag_slide = true` enables the effect and
 Use `ease-in-out` for a gentler start or `linear` for constant speed.
 Set `tag_slide = false` for instant tag switches.
 
+With `tag_monitor_slide = true`, `mwmc move tag next|prev|<mon>` slides
+the whole tag across the screen arrangement in the direction of the destination
+monitor. Tiled windows resize to the destination layout as they arrive. The
+source reveals its fallback tag or wallpaper, and the destination's previous
+tag fades out. Set `tag_monitor_slide = false` for instant whole-tag moves.
+
 With `window_tag_slide = true`, sending a window to a hidden tag with
 `mwmc move win next|prev|<tag>` or `mwmc win tag <tag>` slides it toward
 that tag. If the destination tag is visible on another monitor, the window
-slides to its new position there. Transfers use the same duration and easing
-as tag switches. Set the duration to zero to make both immediate. Dragging
-a window between monitors follows the pointer.
+slides to its new position there. Individual window and whole-tag transfers
+use the same duration and easing as tag switches. Set the duration to zero
+to make all three immediate. Dragging a window between monitors follows the pointer.
 
 Application windows scale and fade in over 185 ms and out over 140 ms. A visible
 tiled window opening, closing, or moving between tags makes neighboring tiles

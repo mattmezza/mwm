@@ -61,7 +61,7 @@ typedef struct {
 	int panelradius, panel_opacity, calendar_width, clock_width, palette_width;
 	int animations, duration, reduced_motion, shadows, shadow_opacity, bar_shadow_blur, panel_shadow_blur;
 	int popup_enter, popup_exit, popup_distance;
-	int tag_slide, tag_slide_duration;
+	int tag_slide, tag_slide_duration, tag_monitor_slide;
 	enum TagSlideEasing tag_slide_easing;
 	int window_enter, window_exit, window_reflow, window_tag_slide;
 	char font[128], monofont[128];

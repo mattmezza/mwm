@@ -78,10 +78,10 @@ index de3e001..5c73453 100644
  		'vblank.c',
 diff --git a/src/mwm_tag_slide.c b/src/mwm_tag_slide.c
 new file mode 100644
-index 0000000..3f16dcf
+index 0000000..5c9d0db
 --- /dev/null
 +++ b/src/mwm_tag_slide.c
-@@ -0,0 +1,370 @@
+@@ -0,0 +1,452 @@
 +// SPDX-License-Identifier: MIT
 +#include <libconfig.h>
 +#include <limits.h>
@@ -108,25 +108,30 @@ index 0000000..3f16dcf
 +	MWM_TAG_CANCEL,
 +	MWM_TILE_REFLOW,
 +	MWM_TRANSFER_BEGIN,
-+	MWM_TRANSFER_ACROSS_BEGIN
++	MWM_TRANSFER_ACROSS_BEGIN,
++	MWM_TAG_MONITOR_BEGIN,
++	MWM_TAG_MONITOR_DESTINATION,
++	MWM_TAG_MONITOR_WINDOW,
++	MWM_TAG_MONITOR_COMMIT
 +};
-+enum { MWM_TAG_VIEWS = 1, MWM_TAG_TRANSFERS = 2 };
-+enum slide_kind { TAG_VIEW, WINDOW_TRANSFER, WINDOW_TRANSFER_ACROSS };
-+// Encoding of the first argument to MWM_TAG_COMMIT.
++enum { MWM_TAG_VIEWS = 1, MWM_TAG_TRANSFERS = 2, MWM_TAG_MONITOR_MOVES = 4 };
++enum slide_kind { TAG_VIEW, WINDOW_TRANSFER, WINDOW_TRANSFER_ACROSS, TAG_MONITOR_MOVE };
++enum monitor_window_role { TAG_WINDOW_MOVING, TAG_WINDOW_REVEAL, TAG_WINDOW_FADE };
++// Encoding of the first argument to either commit message.
 +enum mwm_slide_easing { MWM_EASE_OUT = 0, MWM_EASE_IN_OUT, MWM_EASE_LINEAR };
 +enum { MAX_SLIDE_WINDOWS = 4096, MAX_SLIDE_DURATION = 500, COMMIT_TIMEOUT = 250 };
 +enum { MWM_ENTER = 1, MWM_EXIT = 2, MWM_REFLOW = 4 };
 +
 +struct tag_window {
 +	xcb_window_t id;
-+	ivec2 origin;
-+	bool outgoing;
++	struct ibox bounds;
++	unsigned role;
 +};
 +
 +struct mwm_tag_slide {
 +	struct mwm_tag_slide *next;
-+	struct ibox monitor;
-+	ivec2 destination, old_size;
++	struct ibox monitor, destination, moving_area;
++	ivec2 old_size;
 +	struct tag_window *windows;
 +	size_t count, capacity;
 +	int direction, duration;
@@ -238,9 +243,10 @@ index 0000000..3f16dcf
 +static void remove_monitor_slides(struct mwm_tag_slide **slot, ivec2 origin) {
 +	while (*slot) {
 +		struct mwm_tag_slide *slide = *slot;
++		bool has_destination = slide->destination.size.width != 0 ||
++		                       (slide->kind == WINDOW_TRANSFER_ACROSS && slide->committed);
 +		if (ivec2_eq(slide->monitor.origin, origin) ||
-+		    (slide->kind == WINDOW_TRANSFER_ACROSS && slide->committed &&
-+		     ivec2_eq(slide->destination, origin))) {
++		    (has_destination && ivec2_eq(slide->destination.origin, origin))) {
 +			remove_slide(slot);
 +		} else {
 +			slot = &slide->next;
@@ -248,26 +254,35 @@ index 0000000..3f16dcf
 +	}
 +}
 +
++static struct ibox monitor_box(const uint32_t *data) {
++	return (struct ibox){{(int32_t)data[1], (int32_t)data[2]},
++	                     {(int)(data[3] >> 16), (int)(data[3] & 0xffff)}};
++}
++
++static bool valid_monitor(const struct session *ps, struct ibox box) {
++	return box.size.width > 0 && box.size.height > 0 && box.origin.x >= 0 &&
++	       box.origin.y >= 0 && box.origin.x <= ps->root_width - box.size.width &&
++	       box.origin.y <= ps->root_height - box.size.height;
++}
++
 +static void begin_slide(struct session *ps, const uint32_t *data, enum slide_kind kind) {
 +	if (ps->mwm_tag_slides && !ps->mwm_tag_slides->committed) {
 +		remove_slide(&ps->mwm_tag_slides);
 +	}
-+	int x = (int32_t)data[1], y = (int32_t)data[2];
-+	int width = (int)(data[3] >> 16), height = (int)(data[3] & 0xffff);
++	struct ibox monitor = monitor_box(data);
 +	int duration = (int32_t)data[4];
-+	if (!ps->redirected || width == 0 || height == 0 || x < 0 || y < 0 ||
-+	    x > ps->root_width - width || y > ps->root_height - height ||
++	if (!ps->redirected || !valid_monitor(ps, monitor) ||
 +	    duration < -MAX_SLIDE_DURATION || duration > MAX_SLIDE_DURATION || duration == 0) {
 +		return;
 +	}
 +
 +	// Replace an interrupted slide on this monitor. Others finish independently.
-+	remove_monitor_slides(&ps->mwm_tag_slides, (ivec2){x, y});
++	remove_monitor_slides(&ps->mwm_tag_slides, monitor.origin);
 +
 +	struct mwm_tag_slide *slide = ccalloc(1, struct mwm_tag_slide);
 +	*slide = (struct mwm_tag_slide){
 +	    .next = ps->mwm_tag_slides,
-+	    .monitor = {{x, y}, {width, height}},
++	    .monitor = monitor,
 +	    .kind = kind,
 +	    .direction = duration > 0 ? 1 : -1,
 +	    .duration = abs(duration),
@@ -280,6 +295,14 @@ index 0000000..3f16dcf
 +	xcb_window_t left = ((const struct tag_window *)a)->id;
 +	xcb_window_t right = ((const struct tag_window *)b)->id;
 +	return (left > right) - (left < right);
++}
++
++static void add_slide_window(struct mwm_tag_slide *slide, struct tag_window window) {
++	if (slide->count == slide->capacity) {
++		slide->capacity = slide->capacity == 0 ? 8 : slide->capacity * 2;
++		slide->windows = crealloc(slide->windows, slide->capacity);
++	}
++	slide->windows[slide->count++] = window;
 +}
 +
 +void mwm_tag_slide_event(struct session *ps, const xcb_client_message_event_t *event) {
@@ -300,8 +323,10 @@ index 0000000..3f16dcf
 +	}
 +	if (data[0] == MWM_TAG_CANCEL) {
 +		for (struct mwm_tag_slide **slot = &ps->mwm_tag_slides; *slot;) {
-+			unsigned kind = (*slot)->kind == TAG_VIEW ? MWM_TAG_VIEWS : MWM_TAG_TRANSFERS;
-+			if (!data[1] || (data[1] & kind)) {
++			enum slide_kind kind = (*slot)->kind;
++			unsigned effect = kind == TAG_VIEW ? MWM_TAG_VIEWS :
++			                  kind == TAG_MONITOR_MOVE ? MWM_TAG_MONITOR_MOVES : MWM_TAG_TRANSFERS;
++			if (!data[1] || (data[1] & effect)) {
 +				remove_slide(slot);
 +			} else {
 +				slot = &(*slot)->next;
@@ -315,27 +340,30 @@ index 0000000..3f16dcf
 +	case MWM_TRANSFER_ACROSS_BEGIN:
 +		begin_slide(ps, data, WINDOW_TRANSFER_ACROSS);
 +		return;
++	case MWM_TAG_MONITOR_BEGIN: begin_slide(ps, data, TAG_MONITOR_MOVE); return;
 +	default: break;
 +	}
 +	struct mwm_tag_slide *slide = ps->mwm_tag_slides;
 +	if (!slide || slide->committed) {
 +		return;
 +	}
-+	if (data[0] == MWM_TAG_COMMIT) {
-+		if (slide->count == 0) {
++	bool monitor_move = slide->kind == TAG_MONITOR_MOVE;
++	if (data[0] == (monitor_move ? MWM_TAG_MONITOR_COMMIT : MWM_TAG_COMMIT)) {
++		if (slide->count == 0 || (monitor_move && slide->destination.size.width == 0)) {
 +			remove_slide(&ps->mwm_tag_slides);
 +			return;
 +		}
 +		if (slide->kind == WINDOW_TRANSFER_ACROSS) {
 +			slide->old_size = (ivec2){(int)(data[2] >> 16), (int)(data[2] & 0xffff)};
-+			slide->destination = (ivec2){(int32_t)data[3], (int32_t)data[4]};
++			ivec2 destination = {(int32_t)data[3], (int32_t)data[4]};
 +			if (slide->old_size.width == 0 || slide->old_size.height == 0 ||
-+			    slide->destination.x < 0 || slide->destination.x >= ps->root_width ||
-+			    slide->destination.y < 0 || slide->destination.y >= ps->root_height) {
++			    destination.x < 0 || destination.x >= ps->root_width ||
++			    destination.y < 0 || destination.y >= ps->root_height) {
 +				remove_slide(&ps->mwm_tag_slides);
 +				return;
 +			}
-+			remove_monitor_slides(&slide->next, slide->destination);
++			slide->destination.origin = destination;
++			remove_monitor_slides(&slide->next, destination);
 +		}
 +		qsort(slide->windows, slide->count, sizeof(*slide->windows), compare_window);
 +		slide->easing = data[1] <= MWM_EASE_LINEAR ? (enum mwm_slide_easing)data[1]
@@ -343,10 +371,32 @@ index 0000000..3f16dcf
 +		slide->committed = true;
 +		log_debug("MWM %s at %d,%d, direction %d, duration %d ms",
 +		          slide->kind == TAG_VIEW ? "tag slide" :
++		          monitor_move ? "tag monitor move" :
 +		          slide->kind == WINDOW_TRANSFER_ACROSS ? "cross-monitor transfer" :
 +		          "tag transfer",
 +		          slide->monitor.origin.x, slide->monitor.origin.y,
 +		          slide->direction, slide->duration);
++		return;
++	}
++	if (monitor_move) {
++		if (data[0] == MWM_TAG_MONITOR_DESTINATION) {
++			struct ibox destination = monitor_box(data);
++			if (!valid_monitor(ps, destination) || ivec2_eq(slide->monitor.origin, destination.origin)) {
++				remove_slide(&ps->mwm_tag_slides);
++				return;
++			}
++			slide->destination = destination;
++			remove_monitor_slides(&slide->next, destination.origin);
++		} else if (data[0] == MWM_TAG_MONITOR_WINDOW && data[1] != XCB_NONE &&
++		           data[2] <= TAG_WINDOW_FADE) {
++			struct ibox bounds = {{(int16_t)(data[3] >> 16), (int16_t)data[3]},
++			                      {(int)(data[4] >> 16), (int)(data[4] & 0xffff)}};
++			if (slide->count == MAX_SLIDE_WINDOWS) {
++				remove_slide(&ps->mwm_tag_slides);
++			} else if (bounds.size.width > 0 && bounds.size.height > 0) {
++				add_slide_window(slide, (struct tag_window){data[1], bounds, data[2]});
++			}
++		}
 +		return;
 +	}
 +	int x = (int32_t)data[3], y = (int32_t)data[4];
@@ -355,11 +405,7 @@ index 0000000..3f16dcf
 +	    slide->count == (slide->kind == TAG_VIEW ? MAX_SLIDE_WINDOWS : 1)) {
 +		return;
 +	}
-+	if (slide->count == slide->capacity) {
-+		slide->capacity = slide->capacity == 0 ? 8 : slide->capacity * 2;
-+		slide->windows = crealloc(slide->windows, slide->capacity);
-+	}
-+	slide->windows[slide->count++] = (struct tag_window){data[1], {x, y}, data[2] != 0};
++	add_slide_window(slide, (struct tag_window){data[1], {.origin = {x, y}}, data[2]});
 +}
 +
 +static double eased_progress(enum mwm_slide_easing easing, double t) {
@@ -372,6 +418,14 @@ index 0000000..3f16dcf
 +	}
 +	}
 +	return t;
++}
++
++static int interpolated(int from, int to, double progress) {
++	return (int)lround(from * (1.0 - progress) + to * progress);
++}
++
++static ivec2 interpolated_point(ivec2 from, ivec2 to, double progress) {
++	return (ivec2){interpolated(from.x, to.x, progress), interpolated(from.y, to.y, progress)};
 +}
 +
 +bool mwm_tag_slide_frame(struct session *ps, int64_t now) {
@@ -389,33 +443,61 @@ index 0000000..3f16dcf
 +			double t = (double)(now - slide->started) / slide->duration;
 +			slide->progress = eased_progress(slide->easing, t);
 +		}
++		if (slide->kind == TAG_MONITOR_MOVE) {
++			slide->moving_area = (struct ibox){
++			    interpolated_point(slide->monitor.origin, slide->destination.origin, slide->progress),
++			    interpolated_point(slide->monitor.size, slide->destination.size, slide->progress),
++			};
++		}
 +		slot = &slide->next;
 +	}
 +	return ps->mwm_tag_slides != NULL;
 +}
 +
++static void place_traveling_window(struct mwm_tag_placement *placement, struct ibox old,
++                                   struct ibox bounds, double progress) {
++	placement->origin = interpolated_point(old.origin, bounds.origin, progress);
++	placement->scale = (vec2){
++	    progress + (double)old.size.width / bounds.size.width * (1.0 - progress),
++	    progress + (double)old.size.height / bounds.size.height * (1.0 - progress),
++	};
++}
++
 +static struct mwm_tag_placement place_window(const struct mwm_tag_slide *slide,
 +                                             const struct tag_window *window,
 +                                             struct ibox bounds) {
++	bool outgoing = window->role != 0;
 +	struct mwm_tag_placement placement = {
-+	    .origin = window->outgoing ? window->origin : bounds.origin,
++	    .origin = outgoing ? window->bounds.origin : bounds.origin,
 +	    .clip = slide->monitor,
 +	    .scale = {1.0, 1.0},
++	    .opacity = 1.0f,
 +	};
 +	double p = slide->progress;
++	if (slide->kind == TAG_MONITOR_MOVE) {
++		if (window->role == TAG_WINDOW_MOVING) {
++			place_traveling_window(&placement, window->bounds, bounds, p);
++			placement.clip_extra = slide->destination;
++		} else {
++			bool reveal = window->role == TAG_WINDOW_REVEAL;
++			placement.origin = reveal ? bounds.origin : window->bounds.origin;
++			placement.clip = reveal ? slide->monitor : slide->destination;
++			// Expose the stationary tags as the moving tag passes over them.
++			placement.clip_cutout = slide->moving_area;
++			placement.opacity = (float)(reveal ? p : 1.0 - p);
++		}
++		return placement;
++	}
 +	if (slide->kind == WINDOW_TRANSFER_ACROSS) {
-+		placement.origin.x = (int)lround(window->origin.x * (1.0 - p) + bounds.origin.x * p);
-+		placement.origin.y = (int)lround(window->origin.y * (1.0 - p) + bounds.origin.y * p);
 +		placement.clip = (struct ibox){.size = {INT_MAX, INT_MAX}};
 +		if (slide->committed) {
-+			placement.scale.x = p + (double)slide->old_size.width / bounds.size.width * (1.0 - p);
-+			placement.scale.y = p + (double)slide->old_size.height / bounds.size.height * (1.0 - p);
++			place_traveling_window(&placement, (struct ibox){window->bounds.origin, slide->old_size}, bounds, p);
 +		}
 +		return placement;
 +	}
 +
 +	int distance = slide->direction * slide->monitor.size.width;
-+	int dx = (int)lround(distance * (window->outgoing ? p : p - 1.0));
++	int dx = (int)lround(distance * (outgoing ? p : p - 1.0));
 +	if (slide->kind == TAG_VIEW) {
 +		dx = -dx;
 +		// Keep the two tags on their own sides of the moving seam.
@@ -454,10 +536,10 @@ index 0000000..3f16dcf
 +}
 diff --git a/src/mwm_tag_slide.h b/src/mwm_tag_slide.h
 new file mode 100644
-index 0000000..3153ee3
+index 0000000..05ba58c
 --- /dev/null
 +++ b/src/mwm_tag_slide.h
-@@ -0,0 +1,33 @@
+@@ -0,0 +1,34 @@
 +// SPDX-License-Identifier: MIT
 +#pragma once
 +
@@ -475,8 +557,9 @@ index 0000000..3153ee3
 +
 +struct mwm_tag_placement {
 +	ivec2 origin;
-+	struct ibox clip;
++	struct ibox clip, clip_extra, clip_cutout;
 +	vec2 scale;
++	float opacity;
 +};
 +
 +void mwm_tag_slide_register(struct session *ps);
@@ -568,8 +651,69 @@ index 71a77b1..d2f6841 100644
  	if (ps->redirected) {
  		unredirect(ps);
  	}
+diff --git a/src/renderer/command_builder.c b/src/renderer/command_builder.c
+index 77567f5..0d3c2b9 100644
+--- a/src/renderer/command_builder.c
++++ b/src/renderer/command_builder.c
+@@ -12,6 +12,20 @@
+ 
+ #include "command_builder.h"
+ 
++static inline region_t layer_crop_region(const struct layer *layer) {
++	region_t crop = region_from_box(layer->crop);
++	if (layer->crop_extra.size.width > 0) {
++		struct ibox extra = layer->crop_extra;
++		pixman_region32_union_rect(&crop, &crop, extra.origin.x, extra.origin.y,
++		                           (unsigned)extra.size.width, (unsigned)extra.size.height);
++	}
++	if (layer->crop_cutout.size.width > 0) {
++		scoped_region_t cutout = region_from_box(layer->crop_cutout);
++		pixman_region32_subtract(&crop, &crop, &cutout);
++	}
++	return crop;
++}
++
+ /// Generate commands for rendering the body of the window in `layer`.
+ ///
+ /// @param[in]  frame_region frame region of the window, in window local coordinates
+@@ -24,7 +38,7 @@ commands_for_window_body(struct layer *layer, struct backend_command *cmd_base,
+                          double max_brightness, const struct shader_info *shaders) {
+ 	auto w = layer->win;
+ 	auto cmd = cmd_base;
+-	scoped_region_t crop = region_from_box(layer->crop);
++	scoped_region_t crop = layer_crop_region(layer);
+ 	auto mode = win_calc_mode_raw(layer->win);
+ 	int border_width = w->g.border_width;
+ 	double dim = layer->options.dim;
+@@ -209,7 +223,7 @@ command_for_shadow(struct layer *layer, struct backend_command *cmd,
+ 		}
+ 	}
+ 	log_region(TRACE, &cmd->target_mask);
+-	if (monitors) {
++	if (monitors && layer->crop_extra.size.width == 0) {
+ 		auto monitor_index = win_find_monitor(monitors, w);
+ 		if (monitor_index >= 0) {
+ 			pixman_region32_intersect(&cmd->target_mask, &cmd->target_mask,
+@@ -229,7 +243,7 @@ command_for_shadow(struct layer *layer, struct backend_command *cmd,
+ 		    vec2_reciprocal(layer->shadow_scale));
+ 	}
+ 
+-	scoped_region_t crop = region_from_box(layer->crop);
++	scoped_region_t crop = layer_crop_region(layer);
+ 	pixman_region32_intersect(&cmd->target_mask, &cmd->target_mask, &crop);
+ 
+ 	cmd->blit = (struct backend_blit_args){
+@@ -263,7 +277,7 @@ command_for_blur(struct layer *layer, struct backend_command *cmd,
+ 	}
+ 	region_scale(&cmd->target_mask, layer->window.origin, layer->scale);
+ 
+-	scoped_region_t crop = region_from_box(layer->crop);
++	scoped_region_t crop = layer_crop_region(layer);
+ 	pixman_region32_intersect(&cmd->target_mask, &cmd->target_mask, &crop);
+ 
+ 	cmd->op = BACKEND_COMMAND_BLUR;
 diff --git a/src/renderer/layout.c b/src/renderer/layout.c
-index 9efce9e..bdf20c2 100644
+index 9efce9e..bfd3fb2 100644
 --- a/src/renderer/layout.c
 +++ b/src/renderer/layout.c
 @@ -8,6 +8,7 @@
@@ -590,15 +734,27 @@ index 9efce9e..bdf20c2 100644
  	bool to_paint = false;
  	auto w_opts = win_options(w);
  	if (!w->ever_damaged || !w_opts.paint) {
-@@ -91,6 +93,19 @@ static bool layer_from_window(struct layer *out_layer, struct win *w, ivec2 size
+@@ -67,6 +69,7 @@ static bool layer_from_window(struct layer *out_layer, struct win *w, ivec2 size
+ 	    .x = win_animatable_get(w, WIN_SCRIPT_CROP_WIDTH),
+ 	    .y = win_animatable_get(w, WIN_SCRIPT_CROP_HEIGHT),
+ 	});
++	out_layer->crop_extra = out_layer->crop_cutout = (struct ibox){0};
+ 	if (w_opts.shadow) {
+ 		vec2 scale = {
+ 		    .x = win_animatable_get(w, WIN_SCRIPT_SHADOW_SCALE_X),
+@@ -91,6 +94,23 @@ static bool layer_from_window(struct layer *out_layer, struct win *w, ivec2 size
  		out_layer->shadow_scale = SCALE_IDENTITY;
  	}
  
 +	struct mwm_tag_placement placement;
++	float motion_opacity = 1.0f;
 +	if (mwm_tag_slide_place(slides, win_id(w),
 +	                        (struct ibox){{w->g.x, w->g.y}, out_layer->window.size},
 +	                        &placement)) {
 +		out_layer->crop = placement.clip;
++		out_layer->crop_extra = placement.clip_extra;
++		out_layer->crop_cutout = placement.clip_cutout;
++		motion_opacity = placement.opacity;
 +		out_layer->scale = placement.scale;
 +		out_layer->shadow_scale = placement.scale;
 +		out_layer->window.origin = placement.origin;
@@ -610,7 +766,27 @@ index 9efce9e..bdf20c2 100644
  	struct ibox window_scaled = {
  	    .origin = out_layer->window.origin,
  	    .size = ivec2_scale_floor(out_layer->window.size, out_layer->scale),
-@@ -208,6 +223,7 @@ void layout_manager_free(struct layout_manager *lm) {
+@@ -100,16 +120,16 @@ static bool layer_from_window(struct layer *out_layer, struct win *w, ivec2 size
+ 		goto out;
+ 	}
+ 
+-	out_layer->opacity = (float)win_animatable_get(w, WIN_SCRIPT_OPACITY);
++	out_layer->opacity = (float)win_animatable_get(w, WIN_SCRIPT_OPACITY) * motion_opacity;
+ 	out_layer->blur_opacity =
+-	    (float)clamp(win_animatable_get(w, WIN_SCRIPT_BLUR_OPACITY), 0., 1.);
++	    (float)clamp(win_animatable_get(w, WIN_SCRIPT_BLUR_OPACITY), 0., 1.) * motion_opacity;
+ 	out_layer->shadow_color.red = (float)win_animatable_get(w, WIN_SCRIPT_SHADOW_RED);
+ 	out_layer->shadow_color.green = (float)win_animatable_get(w, WIN_SCRIPT_SHADOW_GREEN);
+ 	out_layer->shadow_color.blue = (float)win_animatable_get(w, WIN_SCRIPT_SHADOW_BLUE);
+ 	out_layer->shadow_color.alpha = 1.0;
+ 	out_layer->shadow_color = color_mult_alpha(
+ 	    out_layer->shadow_color, win_animatable_get(w, WIN_SCRIPT_SHADOW_OPACITY) *
+-	                                 w->shadow_opacity * w->frame_opacity);
++	                                 w->shadow_opacity * w->frame_opacity * motion_opacity);
+ 	if (out_layer->opacity == 0 && out_layer->blur_opacity == 0) {
+ 		goto out;
+ 	}
+@@ -208,6 +228,7 @@ void layout_manager_free(struct layout_manager *lm) {
  //   above.
  
  void layout_manager_append_layout(struct layout_manager *lm, struct wm *wm,
@@ -618,7 +794,7 @@ index 9efce9e..bdf20c2 100644
                                    uint64_t root_pixmap_generation, ivec2 size) {
  	auto prev_layout = &lm->layouts[lm->current];
  	lm->current = (lm->current + 1) % lm->max_buffer_age;
-@@ -224,7 +240,7 @@ void layout_manager_append_layout(struct layout_manager *lm, struct wm *wm,
+@@ -224,7 +245,7 @@ void layout_manager_append_layout(struct layout_manager *lm, struct wm *wm,
  			continue;
  		}
  		dynarr_resize(layout->layers, rank + 1, layer_init, layer_deinit);
@@ -628,10 +804,19 @@ index 9efce9e..bdf20c2 100644
  		}
  
 diff --git a/src/renderer/layout.h b/src/renderer/layout.h
-index 9cde4ec..8bf3cae 100644
+index 9cde4ec..f0eda1a 100644
 --- a/src/renderer/layout.h
 +++ b/src/renderer/layout.h
-@@ -79,12 +79,14 @@ struct layout {
+@@ -42,6 +42,8 @@ struct layer {
+ 	float saved_image_blend;
+ 	/// Crop the content of this layer to this box, in screen coordinates.
+ 	struct ibox crop;
++	/// Optional second box to include and box to exclude during a tag move.
++	struct ibox crop_extra, crop_cutout;
+ 
+ 	/// How many commands are needed to render this layer
+ 	unsigned number_of_commands;
+@@ -79,12 +81,14 @@ struct layout {
  
  struct wm;
  struct layout_manager;

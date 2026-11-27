@@ -964,8 +964,10 @@ dirtomon(int dir)
 
 /* The compositor owns this selection only when it supports the protocol. */
 enum { TagSlideBegin = 1, TagSlideWindow, TagSlideCommit, TagSlideCancel, TileReflow,
-       TagTransferBegin, TagTransferAcrossBegin };
-enum { TagViews = 1, TagTransfers = 2 };
+       TagTransferBegin, TagTransferAcrossBegin, TagMonitorBegin, TagMonitorDestination,
+       TagMonitorWindow, TagMonitorCommit };
+enum { TagViews = 1, TagTransfers = 2, TagMonitorMoves = 4 };
+enum { TagWindowMoving, TagWindowReveal, TagWindowFade };
 enum { WindowEnter = 1, WindowExit = 2, WindowReflow = 4 };
 
 static void
@@ -1088,6 +1090,24 @@ done:
 	drawbars();
 }
 
+static void
+moveclientgeometry(Client *c, const Monitor *from, const Monitor *to)
+{
+	int dx = to->wx - from->wx, dy = to->wy - from->wy;
+	if (c->isfullscreen) {
+		int oldx = c->oldx, oldy = c->oldy, oldw = c->oldw, oldh = c->oldh;
+		resizeclient(c, to->mx, to->my, to->mw, to->mh);
+		c->oldx = oldx + dx;
+		c->oldy = oldy + dy;
+		c->oldw = oldw;
+		c->oldh = oldh;
+	} else if (c->isfloating || tagstate[c->tag].layout == 2) {
+		int x = MAX(to->wx, MIN(c->x + dx, to->wx + to->ww - WIDTH(c)));
+		int y = MAX(to->wy, MIN(c->y + dy, to->wy + to->wh - HEIGHT(c)));
+		resizeclient(c, x, y, c->w, c->h);
+	}
+}
+
 void
 sendmon(Client *c, int tag, int direction)
 {
@@ -1124,21 +1144,8 @@ sendmon(Client *c, int tag, int direction)
 	}
 	unfocus(c, 1);
 	c->tag = tag;
-	if (direction && from && to && from != to) {
-		int dx = to->wx - from->wx, dy = to->wy - from->wy;
-		if (c->isfullscreen) {
-			int oldx = c->oldx, oldy = c->oldy, oldw = c->oldw, oldh = c->oldh;
-			resizeclient(c, to->mx, to->my, to->mw, to->mh);
-			c->oldx = oldx + dx;
-			c->oldy = oldy + dy;
-			c->oldw = oldw;
-			c->oldh = oldh;
-		} else if (c->isfloating || tagstate[tag].layout == 2) {
-			int x = MAX(to->wx, MIN(c->x + dx, to->wx + to->ww - WIDTH(c)));
-			int y = MAX(to->wy, MIN(c->y + dy, to->wy + to->wh - HEIGHT(c)));
-			resizeclient(c, x, y, c->w, c->h);
-		}
-	}
+	if (direction && from && to && from != to)
+		moveclientgeometry(c, from, to);
 	focus(NULL);
 	arrange(NULL);
 	reflow_compositor = reflow_new_window = None;
@@ -1173,6 +1180,43 @@ movewintotag(const char *arg)
 	drawbars();
 }
 
+static Window
+begin_tag_monitor_slide(const Monitor *from, const Monitor *to, int reveal)
+{
+	if (!settings.tag_monitor_slide || !settings.tag_slide_duration || !config_motion_enabled(&settings))
+		return None;
+	unsigned long from_size = motion_size(from->mw, from->mh);
+	unsigned long to_size = motion_size(to->mw, to->mh);
+	if (!from_size || !to_size)
+		return None;
+	Window compositor = XGetSelectionOwner(dpy, tag_slide_selection);
+	if (!compositor)
+		return None;
+
+	motion_message(compositor, TagMonitorBegin, from->mx, from->my, from_size,
+	               settings.tag_slide_duration);
+	motion_message(compositor, TagMonitorDestination, to->mx, to->my, to_size, 0);
+	for (Client *c = clients; c; c = c->next) {
+		int role;
+		if (c->tag == from->seltag)
+			role = TagWindowMoving;
+		else if (c->issticky)
+			continue;
+		else if (c->tag == reveal)
+			role = TagWindowReveal;
+		else if (c->tag == to->seltag)
+			role = TagWindowFade;
+		else
+			continue;
+		if (c->x < INT16_MIN || c->x > INT16_MAX || c->y < INT16_MIN || c->y > INT16_MAX)
+			continue;
+		unsigned long origin = (unsigned long)(uint16_t)c->x << 16 | (uint16_t)c->y;
+		motion_message(compositor, TagMonitorWindow, c->win, role, origin,
+		               motion_size(WIDTH(c), HEIGHT(c)));
+	}
+	return compositor;
+}
+
 void
 movetagtomon(const char *arg)
 {
@@ -1195,28 +1239,32 @@ movetagtomon(const char *arg)
 	}
 	if (target == src->num)
 		return;
-
-	tagstate[t].mon = target;
-	/* source monitor falls back to another owned tag, or nothing */
-	src->seltag = -1;
-	{
-		int i;
-		for (i = 0; i < MAX_TAGS; i++)
-			if (tagstate[i].mon == src->num) {
-				src->seltag = i;
-				break;
-			}
-	}
-	/* show the moved tag on the target and follow it */
 	for (m = mons; m && m->num != target; m = m->next)
 		;
-	if (m) {
-		m->seltag = t;
-		selmon = m;
-		warptomon(selmon);
-	}
+	if (!m)
+		return;
+
+	/* source monitor falls back to another owned tag, or nothing */
+	int reveal = -1;
+	for (int i = 0; i < MAX_TAGS; i++)
+		if (i != t && tagstate[i].mon == src->num) {
+			reveal = i;
+			break;
+		}
+	Window compositor = begin_tag_monitor_slide(src, m, reveal);
+	tagstate[t].mon = target;
+	src->seltag = reveal;
+	/* show the moved tag on the target and follow it */
+	m->seltag = t;
+	selmon = m;
+	for (Client *c = clients; c; c = c->next)
+		if (c->tag == t)
+			moveclientgeometry(c, src, m);
+	warptomon(selmon);
 	arrange(NULL);
 	focus(NULL);
+	if (compositor)
+		motion_message(compositor, TagMonitorCommit, settings.tag_slide_easing, 0, 0, 0);
 	drawbars();
 }
 
@@ -3739,10 +3787,11 @@ applystyle(const Config *next)
 	if (!first && settings.tag_slide_duration && config_motion_enabled(&settings)) {
 		int stop = 0;
 		if (!next->tag_slide_duration || !config_motion_enabled(next))
-			stop = TagViews | TagTransfers;
+			stop = TagViews | TagTransfers | TagMonitorMoves;
 		else {
 			stop |= settings.tag_slide && !next->tag_slide ? TagViews : 0;
 			stop |= settings.window_tag_slide && !next->window_tag_slide ? TagTransfers : 0;
+			stop |= settings.tag_monitor_slide && !next->tag_monitor_slide ? TagMonitorMoves : 0;
 		}
 		if (stop)
 			cancel_tag_slides(stop);
